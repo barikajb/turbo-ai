@@ -1,0 +1,77 @@
+{
+  "name": "turbo-ai-local",
+  "displayName": "TURBO AI (local)",
+  "description": "Ask, explain and fix code with your local TURBO assistant (Ollama). Nothing leaves your machine.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages", "Other"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "turbo.ask", "title": "Ask AI", "category": "TURBO", "icon": "$(comment-discussion)" },
+      { "command": "turbo.explainSelection", "title": "Explain Selection", "category": "TURBO" },
+      { "command": "turbo.fixSelection", "title": "Fix Selection", "category": "TURBO" },
+      { "command": "turbo.acceptFix", "title": "Accept Fix", "category": "TURBO", "icon": "$(check)" },
+      { "command": "turbo.rejectFix", "title": "Reject Fix", "category": "TURBO", "icon": "$(close)" },
+      { "command": "turbo.resetConversation", "title": "Reset Conversation", "category": "TURBO" },
+      { "command": "turbo.startServer", "title": "Start Server", "category": "TURBO" },
+      { "command": "turbo.showPanel", "title": "Show Panel", "category": "TURBO" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "turbo.ask", "group": "turbo@1", "when": "editorTextFocus" },
+        { "command": "turbo.explainSelection", "group": "turbo@2", "when": "editorTextFocus" },
+        { "command": "turbo.fixSelection", "group": "turbo@3", "when": "editorTextFocus && !editorReadonly" }
+      ],
+      "editor/title": [
+        { "command": "turbo.acceptFix", "group": "navigation@1", "when": "turbo.fixPending && isInDiffEditor" },
+        { "command": "turbo.rejectFix", "group": "navigation@2", "when": "turbo.fixPending && isInDiffEditor" }
+      ],
+      "commandPalette": [
+        { "command": "turbo.acceptFix", "when": "turbo.fixPending" },
+        { "command": "turbo.rejectFix", "when": "turbo.fixPending" }
+      ]
+    },
+    "keybindings": [
+      { "command": "turbo.ask", "key": "ctrl+alt+a" },
+      { "command": "turbo.explainSelection", "key": "ctrl+alt+e", "when": "editorTextFocus" },
+      { "command": "turbo.fixSelection", "key": "ctrl+alt+f", "when": "editorTextFocus && !editorReadonly" }
+    ],
+    "configuration": {
+      "title": "TURBO AI",
+      "properties": {
+        "turbo.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765",
+          "description": "Address of the TURBO server (run `turbo serve`)."
+        },
+        "turbo.token": {
+          "type": "string",
+          "default": "",
+          "description": "Must match TURBO_TOKEN on the server, if you set one."
+        },
+        "turbo.projectPath": {
+          "type": "string",
+          "default": "",
+          "description": "Folder containing turbo.py. Used by 'TURBO: Start Server'."
+        },
+        "turbo.contextLines": {
+          "type": "number",
+          "default": 40,
+          "description": "Lines above and below the selection sent as read-only context."
+        },
+        "turbo.requestTimeoutSeconds": {
+          "type": "number",
+          "default": 600,
+          "description": "Give up waiting for the model after this many seconds."
+        }
+      }
+    }
+  }
+}
