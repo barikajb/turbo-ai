@@ -145,3 +145,42 @@ class FixExplanationFilterTests(unittest.TestCase):
 
     def test_short_reply(self):
         self.assertEqual(self.run_filter("Ok.", 1), "Ok.")
+
+
+class DoctorTests(unittest.TestCase):
+    def run_doctor(self, list_models, port_state=("free", "")):
+        assistant, llm = make_assistant(self)
+        llm.list_models = list_models
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch.object(turbo, "check_port", return_value=port_state):
+            code = turbo.main(["doctor"], assistant=assistant)
+        return code, out.getvalue()
+
+    def test_all_good(self):
+        code, out = self.run_doctor(lambda: ["chat-model", "code-model:latest"])
+        # "code-model" isn't tagged, so "code-model:latest" counts as installed.
+        self.assertEqual(code, 0, out)
+        self.assertIn("All good", out)
+
+    def test_missing_model_shows_pull_command(self):
+        code, out = self.run_doctor(lambda: ["chat-model"])
+        self.assertEqual(code, 1)
+        self.assertIn("ollama pull code-model", out)
+
+    def test_ollama_down(self):
+        def down():
+            raise LLMConnectionError("down")
+        code, out = self.run_doctor(down)
+        self.assertEqual(code, 1)
+        self.assertIn("not reachable", out)
+        self.assertIn("https://ollama.com", out)
+
+    def test_port_busy(self):
+        code, out = self.run_doctor(lambda: ["chat-model", "code-model"], ("busy", "x"))
+        self.assertEqual(code, 1)
+        self.assertIn("TURBO_PORT", out)
+
+    def test_model_installed_matching(self):
+        self.assertTrue(turbo.model_installed("llama3.2:3b", ["llama3.2:3b"]))
+        self.assertTrue(turbo.model_installed("mistral", ["mistral:latest"]))
+        self.assertFalse(turbo.model_installed("qwen2.5-coder:7b", ["qwen2.5-coder:3b"]))

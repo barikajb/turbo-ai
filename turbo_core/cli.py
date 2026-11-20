@@ -380,6 +380,86 @@ def cmd_reset(assistant: Assistant, args) -> int:
     return 0
 
 
+def model_installed(name: str, installed: list[str]) -> bool:
+    return name in installed or (":" not in name and f"{name}:latest" in installed)
+
+
+def check_port(host: str, port: int) -> tuple[str, str]:
+    """('free'|'turbo'|'busy', detail) for the server port."""
+    import json
+    import socket
+    import urllib.request
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        if sock.connect_ex((host, port)) != 0:
+            return "free", ""
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/health", timeout=3) as response:
+            if json.loads(response.read()).get("ok"):
+                return "turbo", ""
+    except Exception as error:  # noqa: BLE001 - anything else on the port
+        return "busy", str(error)
+    return "busy", ""
+
+
+def cmd_doctor(assistant: Assistant, args) -> int:
+    from turbo_core import __version__
+
+    settings = assistant.settings
+    color = sys.stdout.isatty()
+    ok_mark = f"{GREEN}✓{RESET}" if color else "OK  "
+    bad_mark = f"{RED}✗{RESET}" if color else "FAIL"
+    note_mark = f"{CYAN}i{RESET}" if color else "    "
+    problems = 0
+
+    def report(good: bool | None, text: str, fix: str = "") -> None:
+        nonlocal problems
+        mark = note_mark if good is None else ok_mark if good else bad_mark
+        print(f" {mark} {text}")
+        if fix:
+            print(f"      -> {fix}")
+        if good is False:
+            problems += 1
+
+    print(f"TURBO {__version__} doctor\n")
+    report(None, f"Python {sys.version.split()[0]}  ({sys.executable})")
+    report(None, f"Data folder: {settings.db_path.parent}")
+
+    try:
+        installed = assistant.llm.list_models()
+    except LLMError:
+        report(False, f"Ollama is not reachable at {settings.ollama_url}",
+               "Install it from https://ollama.com, then start the Ollama app (or run: ollama serve)")
+        installed = None
+    else:
+        report(True, f"Ollama is running at {settings.ollama_url} ({len(installed)} models installed)")
+
+    for role, name in (("chat", settings.chat_model), ("code", settings.code_model)):
+        if installed is None:
+            report(None, f"{role} model {name}: can't check until Ollama is running")
+        elif model_installed(name, installed):
+            report(True, f"{role} model {name} is installed")
+        else:
+            report(False, f"{role} model {name} is not installed", f"ollama pull {name}")
+
+    state, detail = check_port(settings.host, settings.port)
+    if state == "free":
+        report(True, f"Port {settings.port} is free for `turbo serve` (VS Code extension)")
+    elif state == "turbo":
+        report(True, f"A TURBO server is already running on port {settings.port}")
+    else:
+        report(False, f"Port {settings.port} is used by another program",
+               "Set TURBO_PORT to another number (and turbo.serverUrl in VS Code)")
+
+    print()
+    if problems:
+        print(f"{problems} problem(s) found. Fix the items marked above, then run `turbo doctor` again.")
+        return 1
+    print("All good. Try: turbo")
+    return 0
+
+
 def cmd_serve(_assistant: Assistant, args) -> int:
     from turbo_core.server import serve
 
@@ -422,6 +502,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("reset", help="forget the conversation for --session")
     p.set_defaults(func=cmd_reset)
+
+    p = sub.add_parser("doctor", help="check that Ollama, the models and the server port are ready")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("serve", help="run the local HTTP server for the VS Code extension")
     p.set_defaults(func=cmd_serve)
