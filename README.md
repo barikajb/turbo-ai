@@ -150,3 +150,7 @@ scripts/build_vsix.py    packages the extension
 tests/                   unittest suite (mocked Ollama)
 turbo_voice.py etc.      original voice assistant (unchanged)
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
