@@ -84,5 +84,49 @@ class OllamaClientTests(unittest.TestCase):
             client.chat([], model="m")
 
 
+class OllamaStreamTests(unittest.TestCase):
+    def stream_client(self, lines, status=200):
+        session = mock.Mock()
+        response = fake_response(status, {"error": "x"} if status >= 400 else None)
+        response.iter_lines.return_value = iter(lines)
+        session.post.return_value = response
+        return OllamaClient(session=session), session, response
+
+    def test_yields_pieces_until_done(self):
+        lines = [
+            b'{"message": {"content": "Hel"}, "done": false}',
+            b"",
+            b'{"message": {"content": "lo"}, "done": false}',
+            b'{"message": {"content": ""}, "done": true}',
+            b'{"message": {"content": "ignored"}}',
+        ]
+        client, session, response = self.stream_client(lines)
+        self.assertEqual(list(client.chat_stream([], model="m")), ["Hel", "lo"])
+        self.assertTrue(session.post.call_args.kwargs["json"]["stream"])
+        self.assertTrue(session.post.call_args.kwargs["stream"])
+        response.close.assert_called()
+
+    def test_error_mid_stream(self):
+        client, _, _ = self.stream_client([b'{"message": {"content": "a"}}', b'{"error": "out of memory"}'])
+        with self.assertRaisesRegex(LLMBadResponse, "out of memory"):
+            list(client.chat_stream([], model="m"))
+
+    def test_bad_line(self):
+        client, _, _ = self.stream_client([b"not json"])
+        with self.assertRaises(LLMBadResponse):
+            list(client.chat_stream([], model="m"))
+
+    def test_stall_is_a_timeout(self):
+        client, _, response = self.stream_client([])
+        response.iter_lines.side_effect = requests.exceptions.ReadTimeout()
+        with self.assertRaises(LLMTimeout):
+            list(client.chat_stream([], model="m"))
+
+    def test_missing_model_before_streaming(self):
+        client, _, _ = self.stream_client([], status=404)
+        with self.assertRaises(LLMModelNotFound):
+            list(client.chat_stream([], model="m"))
+
+
 if __name__ == "__main__":
     unittest.main()

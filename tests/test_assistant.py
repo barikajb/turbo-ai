@@ -124,5 +124,29 @@ class FixTests(unittest.TestCase):
         self.assertEqual(llm.calls[1]["model"], "code-model")
 
 
+class StreamingTests(unittest.TestCase):
+    def test_ask_streams_pieces_and_saves_full_reply(self):
+        assistant, llm = make_assistant(self, "  Paris is the capital.  ", "ok")
+        pieces = []
+        answer = assistant.ask("Capital?", session_id="s", on_token=pieces.append)
+        self.assertEqual("".join(pieces), "  Paris is the capital.  ")
+        self.assertGreater(len(pieces), 1)
+        self.assertEqual(answer, "Paris is the capital.")
+        self.assertTrue(llm.calls[0]["stream"])
+        assistant.ask("And?", session_id="s")
+        self.assertEqual(llm.calls[1]["messages"][2]["content"], "Paris is the capital.")
+
+    def test_streamed_fix_gives_same_result(self):
+        assistant, _ = make_assistant(self, FIX_REPLY)
+        result = assistant.fix(BUGGY, filename="stats.py", on_token=lambda _p: None)
+        self.assertTrue(result.changed)
+        self.assertIn("+    return sum(xs) / len(xs)\n", result.diff)
+
+    def test_no_streaming_without_callback(self):
+        assistant, llm = make_assistant(self, "a")
+        assistant.ask("q")
+        self.assertFalse(llm.calls[0]["stream"])
+
+
 if __name__ == "__main__":
     unittest.main()

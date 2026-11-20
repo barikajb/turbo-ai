@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, Iterator, Protocol
 
 from . import diffing, prompts
 from .config import Settings
@@ -16,6 +16,13 @@ MAX_CONTEXT_CHARS = 8_000
 
 class ChatClient(Protocol):
     def chat(self, messages: list[dict[str, str]], model: str, temperature: float = ...) -> str: ...
+
+    def chat_stream(
+        self, messages: list[dict[str, str]], model: str, temperature: float = ...
+    ) -> Iterator[str]: ...
+
+
+OnToken = Callable[[str], None]
 
 
 class InputError(ValueError):
@@ -65,11 +72,12 @@ class Assistant:
         session_id: str = "default",
         context: str | None = None,
         language: str | None = None,
+        on_token: OnToken | None = None,
     ) -> str:
         question = _require(question, "question")
         context = _limit(context, MAX_CODE_CHARS, "context") if context else None
         message = prompts.ask_message(question, context, prompts.guess_language(None, language))
-        return self._converse(session_id, message, model=None)
+        return self._converse(session_id, message, model=None, on_token=on_token)
 
     def explain(
         self,
@@ -79,6 +87,7 @@ class Assistant:
         question: str | None = None,
         context: str | None = None,
         session_id: str = "default",
+        on_token: OnToken | None = None,
     ) -> str:
         code = _limit(_require(code, "code"), MAX_CODE_CHARS, "code")
         lang = prompts.guess_language(filename, language)
@@ -86,7 +95,7 @@ class Assistant:
         message = prompts.explain_message(
             diffing.dedent(code, shape), filename, lang, question, _trim_context(context)
         )
-        return self._converse(session_id, message, self.settings.code_model)
+        return self._converse(session_id, message, self.settings.code_model, on_token=on_token)
 
     def fix(
         self,
@@ -97,6 +106,7 @@ class Assistant:
         context: str | None = None,
         session_id: str = "default",
         start_line: int = 1,
+        on_token: OnToken | None = None,
     ) -> FixResult:
         code = _limit(_require(code, "code"), MAX_CODE_CHARS, "code")
         lang = prompts.guess_language(filename, language)
@@ -104,7 +114,9 @@ class Assistant:
         message = prompts.fix_message(
             diffing.dedent(code, shape), filename, lang, instruction, _trim_context(context)
         )
-        reply = self._converse(session_id, message, self.settings.code_model, temperature=0.1)
+        reply = self._converse(
+            session_id, message, self.settings.code_model, temperature=0.1, on_token=on_token
+        )
 
         parsed = diffing.parse_fix_reply(reply)
         if parsed.code is None:
@@ -140,10 +152,16 @@ class Assistant:
     # ---- internals --------------------------------------------------------
 
     def _converse(
-        self, session_id: str, message: str, model: str | None, temperature: float = 0.2
+        self,
+        session_id: str,
+        message: str,
+        model: str | None,
+        temperature: float = 0.2,
+        on_token: OnToken | None = None,
     ) -> str:
         """Send message with session history. model=None picks automatically:
-        the code model if code is in play, otherwise the faster chat model."""
+        the code model if code is in play, otherwise the faster chat model.
+        With on_token, the reply is streamed and each piece passed to it."""
         session_id = (session_id or "default").strip()[:100] or "default"
         history = self.store.history(session_id, self.settings.history_chars)
         messages = [{"role": "system", "content": prompts.SYSTEM_PROMPT}, *history]
@@ -151,7 +169,14 @@ class Assistant:
         if model is None:
             has_code = any("```" in m["content"] for m in messages[1:])
             model = self.settings.code_model if has_code else self.settings.chat_model
-        reply = self.llm.chat(messages, model=model, temperature=temperature)
+        if on_token is None:
+            reply = self.llm.chat(messages, model=model, temperature=temperature)
+        else:
+            pieces = []
+            for piece in self.llm.chat_stream(messages, model=model, temperature=temperature):
+                pieces.append(piece)
+                on_token(piece)
+            reply = "".join(pieces).strip()
         # Saved only after a successful reply, so failures don't pollute history.
         self.store.add_exchange(session_id, message, reply)
         return reply

@@ -54,6 +54,11 @@ Follow-ups remember the conversation: run `turbo fix ...`, then
 `turbo ask "why was that wrong?"`. Use `-s NAME` for separate conversations
 (the default is `cli`). Diffs can be saved and applied with `git apply`.
 
+Answers stream in word by word as the model writes them. For `fix`, the
+explanation streams and the diff is shown when the model finishes. Use
+`turbo --no-stream ...` to print answers all at once. In `chat`, Ctrl+C stops
+the current answer without leaving the chat.
+
 Exit codes: `0` ok, `1` model/Ollama error, `2` bad input.
 
 ## VS Code

@@ -15,7 +15,17 @@ class FakeLLM:
         self.calls = []
 
     def chat(self, messages, model, temperature=0.2):
-        self.calls.append({"messages": messages, "model": model})
+        self.calls.append({"messages": messages, "model": model, "stream": False})
+        return self._next()
+
+    def chat_stream(self, messages, model, temperature=0.2, chunk_size=3):
+        self.calls.append({"messages": messages, "model": model, "stream": True})
+        reply = self._next()
+        # Small chunks so markers get split across pieces, like real streaming.
+        for i in range(0, len(reply), chunk_size):
+            yield reply[i:i + chunk_size]
+
+    def _next(self):
         if not self.replies:
             raise AssertionError("FakeLLM ran out of replies")
         reply = self.replies.pop(0)

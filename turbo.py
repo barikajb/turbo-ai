@@ -116,6 +116,99 @@ def status(message: str) -> None:
     print(f"{DIM}{message}{RESET}" if sys.stderr.isatty() else message, file=sys.stderr)
 
 
+class StreamPrinter:
+    """Prints the answer as it arrives. Shows a 'thinking...' line until the
+    first words come in, then erases it (on a real terminal)."""
+
+    def __init__(self, waiting_message: str):
+        self.started = False
+        self.at_line_start = True
+        self.tty = sys.stderr.isatty()
+        if self.tty:
+            sys.stderr.write(f"{DIM}{waiting_message}{RESET}")
+            sys.stderr.flush()
+        else:
+            status(waiting_message)
+
+    def __call__(self, text: str) -> None:
+        if not self.started:
+            text = text.lstrip()
+            if not text:
+                return
+            self.started = True
+            if self.tty:
+                sys.stderr.write("\r\033[K")  # erase the "thinking..." line
+                sys.stderr.flush()
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        self.at_line_start = text.endswith("\n")
+
+    def finish(self) -> None:
+        if self.tty and not self.started:
+            sys.stderr.write("\r\033[K")
+            sys.stderr.flush()
+        if self.started and not self.at_line_start:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+
+class FixExplanationFilter:
+    """Passes through the explanation part of a fix reply and hides the rest.
+
+    The reply looks like 'EXPLANATION: ... FIXED CODE: ```...```'. The code is
+    shown afterwards as a diff, so streaming it too would just repeat it.
+    """
+
+    START = "EXPLANATION:"
+    STOP = "FIXED CODE"
+
+    def __init__(self, emit):
+        self.emit = emit
+        self.buffer = ""
+        self.started = False   # label handled
+        self.emitted = False   # some real text already sent
+        self.hidden = False    # reached the code; drop the rest
+
+    def __call__(self, text: str) -> None:
+        if self.hidden:
+            return
+        self.buffer += text
+        if not self.started:
+            stripped = self.buffer.lstrip()
+            if len(stripped) < len(self.START) and self.START.startswith(stripped.upper()):
+                return  # might still be the label; wait
+            if stripped.upper().startswith(self.START):
+                stripped = stripped[len(self.START):]
+            self.buffer = stripped
+            self.started = True
+        if not self.emitted:
+            self.buffer = self.buffer.lstrip()
+
+        index = self.buffer.upper().find(self.STOP)
+        if index >= 0:
+            self._send(self.buffer[:index].rstrip())
+            self.buffer = ""
+            self.hidden = True
+            return
+        # Hold back a tail that could be the start of the STOP marker, plus any
+        # trailing whitespace (it may be the blank lines right before it).
+        safe = len(self.buffer) - (len(self.STOP) - 1)
+        if safe > 0:
+            ready = self.buffer[:safe].rstrip()
+            self._send(ready)
+            self.buffer = self.buffer[len(ready):]
+
+    def _send(self, text: str) -> None:
+        if text:
+            self.emit(text)
+            self.emitted = True
+
+    def finish(self) -> None:
+        if not self.hidden:
+            self._send(self.buffer.strip() if not self.emitted else self.buffer.rstrip())
+        self.buffer = ""
+
+
 def apply_fix(source: Source, fixed_code: str) -> None:
     lines = source.text.splitlines(keepends=True)
     with source.path.open(encoding="utf-8", newline="") as handle:
@@ -128,33 +221,55 @@ def apply_fix(source: Source, fixed_code: str) -> None:
 
 # ---- commands ----------------------------------------------------------------
 
+def run_streamed(call, waiting_message: str, stream: bool) -> str:
+    """Run an assistant call, streaming its answer to the terminal if enabled.
+    Returns the full answer; prints it at the end when not streaming."""
+    if not stream:
+        status(waiting_message)
+        answer = call(None)
+        print(answer)
+        return answer
+    printer = StreamPrinter(waiting_message)
+    try:
+        return call(printer)
+    finally:
+        printer.finish()
+
+
 def cmd_ask(assistant: Assistant, args) -> int:
     context = None
     if args.file:
         context = load_source(args.file, args.lines).selection
-    status("TURBO is thinking...")
-    print(assistant.ask(" ".join(args.question), session_id=args.session, context=context))
+    question = " ".join(args.question)
+    run_streamed(
+        lambda on_token: assistant.ask(question, session_id=args.session, context=context, on_token=on_token),
+        "TURBO is thinking...",
+        not args.no_stream,
+    )
     return 0
 
 
 def cmd_explain(assistant: Assistant, args) -> int:
     source = load_source(args.file, args.lines)
-    status(f"Explaining {source.label} lines {source.start}-{source.end}...")
-    print(assistant.explain(
-        source.selection,
-        filename=source.path.name if source.path else None,
-        question=args.question,
-        context=source.context,
-        session_id=args.session,
-    ))
+    run_streamed(
+        lambda on_token: assistant.explain(
+            source.selection,
+            filename=source.path.name if source.path else None,
+            question=args.question,
+            context=source.context,
+            session_id=args.session,
+            on_token=on_token,
+        ),
+        f"Explaining {source.label} lines {source.start}-{source.end}...",
+        not args.no_stream,
+    )
     return 0
 
 
 def cmd_fix(assistant: Assistant, args) -> int:
     source = load_source(args.file, args.lines)
-    status(f"Fixing {source.label} lines {source.start}-{source.end}...")
-    result = assistant.fix(
-        source.selection,
+    waiting = f"Fixing {source.label} lines {source.start}-{source.end}..."
+    fix_kwargs = dict(
         filename=source.display_name,
         instruction=args.message,
         context=source.context,
@@ -162,7 +277,21 @@ def cmd_fix(assistant: Assistant, args) -> int:
         start_line=source.start,
     )
 
-    print(result.explanation, end="\n\n")
+    if args.no_stream:
+        status(waiting)
+        result = assistant.fix(source.selection, **fix_kwargs)
+        print(result.explanation, end="\n\n")
+    else:
+        printer = StreamPrinter(waiting)
+        explanation = FixExplanationFilter(printer)
+        try:
+            result = assistant.fix(source.selection, on_token=explanation, **fix_kwargs)
+            explanation.finish()
+        finally:
+            printer.finish()
+        if not printer.started:  # nothing streamed (unexpected format)
+            print(result.explanation)
+        print()
     for warning in result.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
     if not result.changed:
@@ -230,12 +359,19 @@ def cmd_chat(assistant: Assistant, args) -> int:
             continue
 
         try:
-            status("thinking...")
-            answer = assistant.ask(line, session_id=args.session, context=pending_context)
+            print()
+            run_streamed(
+                lambda on_token: assistant.ask(
+                    line, session_id=args.session, context=pending_context, on_token=on_token
+                ),
+                "thinking...",
+                not args.no_stream,
+            )
             pending_context = None
-            print(f"\n{answer}")
         except (LLMError, InputError) as error:
             print(f"Error: {error}")
+        except KeyboardInterrupt:
+            print("\n(stopped)")
 
 
 def cmd_reset(assistant: Assistant, args) -> int:
@@ -254,6 +390,9 @@ def cmd_serve(_assistant: Assistant, args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="turbo", description="TURBO local coding assistant")
     parser.add_argument("-s", "--session", default="cli", help="conversation name (default: cli)")
+    parser.add_argument(
+        "--no-stream", action="store_true", help="print answers all at once instead of word by word"
+    )
     parser.set_defaults(func=cmd_chat)  # plain `turbo` opens the chat
     sub = parser.add_subparsers(dest="command")
 
