@@ -1,0 +1,20 @@
+# Secrets - never commit
+.env
+credentials.json
+token.json
+
+# Local data
+*.db
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Large downloaded models
+vosk-model-*/
+
+# Build output
+dist/
+*.vsix
