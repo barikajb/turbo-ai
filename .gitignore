@@ -18,3 +18,5 @@ vosk-model-*/
 # Build output
 dist/
 *.vsix
+*.egg-info/
+build/

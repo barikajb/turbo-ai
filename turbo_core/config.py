@@ -2,15 +2,24 @@
 
 Nothing secret is hardcoded. Every setting has a safe local default, so TURBO
 runs with no configuration as long as Ollama is running on this machine.
+
+Per-user files live in the TURBO home folder: ~/.turbo by default, or the
+folder named by TURBO_HOME. It holds turbo.db (conversation history) and an
+optional .env. A .env in the current folder is deliberately NOT read, so a
+cloned repository can't silently redirect TURBO.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+def turbo_home() -> Path:
+    """Folder for per-user TURBO files (~/.turbo unless TURBO_HOME is set)."""
+    custom = os.environ.get("TURBO_HOME", "").strip()
+    return Path(custom).expanduser() if custom else Path.home() / ".turbo"
 
 
 def load_dotenv(path: Path | str | None = None) -> None:
@@ -19,7 +28,7 @@ def load_dotenv(path: Path | str | None = None) -> None:
     Real environment variables always win over the file. Lines starting with
     '#' and blank lines are ignored; surrounding quotes are stripped.
     """
-    path = Path(path) if path else PROJECT_ROOT / ".env"
+    path = Path(path) if path else turbo_home() / ".env"
     if not path.is_file():
         return
 
@@ -56,7 +65,7 @@ class Settings:
     timeout_seconds: int = 300
     context_tokens: int = 8192
     history_chars: int = 12000
-    db_path: Path = PROJECT_ROOT / "data" / "turbo.db"
+    db_path: Path = field(default_factory=lambda: turbo_home() / "turbo.db")
     host: str = "127.0.0.1"
     port: int = 8765
     token: str = ""

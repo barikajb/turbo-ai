@@ -3,7 +3,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-import turbo
+from turbo_core import cli as turbo
 from tests.helpers import make_assistant, temp_dir
 from tests.test_assistant import FIX_REPLY
 from turbo_core.llm import LLMConnectionError
