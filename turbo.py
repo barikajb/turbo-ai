@@ -39,6 +39,16 @@ class Source:
     def label(self) -> str:
         return str(self.path) if self.path else "stdin"
 
+    @property
+    def display_name(self) -> str:
+        """Path relative to the current folder when possible, for diff headers."""
+        if self.path is None:
+            return "stdin"
+        try:
+            return str(self.path.resolve().relative_to(Path.cwd().resolve()))
+        except ValueError:
+            return self.path.name
+
 
 def parse_lines(spec: str | None, total: int) -> tuple[int, int]:
     if not spec:
@@ -145,7 +155,7 @@ def cmd_fix(assistant: Assistant, args) -> int:
     status(f"Fixing {source.label} lines {source.start}-{source.end}...")
     result = assistant.fix(
         source.selection,
-        filename=str(source.path) if source.path else "stdin",
+        filename=source.display_name,
         instruction=args.message,
         context=source.context,
         session_id=args.session,
