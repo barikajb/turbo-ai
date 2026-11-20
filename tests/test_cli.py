@@ -93,6 +93,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Can't reach Ollama", err)
 
+    def test_no_command_opens_chat(self):
+        code, out, _, llm = self.run_cli([], "hello back", stdin="hello\n/exit\n")
+        self.assertEqual(code, 0)
+        self.assertIn("TURBO chat", out)
+        self.assertIn("hello back", out)
+
     def test_chat_follow_up_and_exit(self):
         code, out, _, llm = self.run_cli(["chat"], "A1", "A2", stdin="q1\nq2\n/exit\n")
         self.assertEqual(code, 0)

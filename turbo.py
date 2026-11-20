@@ -185,11 +185,13 @@ def cmd_fix(assistant: Assistant, args) -> int:
 
 
 def cmd_chat(assistant: Assistant, args) -> int:
-    print("TURBO chat. Commands: /file PATH [LINES]  /paste  /reset  /exit")
+    print("TURBO chat - local coding assistant. Ask anything; follow-ups remember the conversation.")
+    print("Commands: /file PATH [LINES]  /paste  /reset  /exit     (turbo --help for more)")
     pending_context: str | None = None
     while True:
         try:
-            line = input(f"\n{CYAN}you>{RESET} " if sys.stdout.isatty() else "you> ").strip()
+            line = input(f"\n{CYAN}you>{RESET} " if sys.stdout.isatty() else "you> ")
+            line = line.lstrip("﻿").strip()  # PowerShell pipes add a BOM
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
@@ -252,7 +254,8 @@ def cmd_serve(_assistant: Assistant, args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="turbo", description="TURBO local coding assistant")
     parser.add_argument("-s", "--session", default="cli", help="conversation name (default: cli)")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.set_defaults(func=cmd_chat)  # plain `turbo` opens the chat
+    sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("ask", help="ask a question")
     p.add_argument("question", nargs="+")

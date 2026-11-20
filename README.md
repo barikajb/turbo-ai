@@ -30,7 +30,7 @@ terminal: turbo ask/fix ──────────────────�
    .venv\Scripts\python -m pip install -r requirements.txt
    ```
 
-3. *(Optional)* **Use `turbo` from any folder**: add this folder to your PATH.
+3. **Use `turbo` from any folder**: add this folder to your PATH (done on this PC). Then just type `turbo` to start chatting.
    `turbo.cmd` runs `turbo.py` with the project's venv.
 
 4. *(Optional)* **Settings**: copy `.env.example` to `.env` and edit. Everything has a default.
