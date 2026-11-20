@@ -11,29 +11,62 @@ Use it from:
 ```
 VS Code extension ──HTTP (127.0.0.1)──▶ turbo serve ─┐
 terminal: turbo ask/fix ─────────────────────────────┼─▶ turbo_core ──▶ Ollama (local models)
-                                                     └── SQLite conversation history (data/turbo.db)
+                                                     └── SQLite conversation history (~/.turbo)
 ```
 
-## Setup (once)
+## Install
 
-1. **Install Ollama** and pull the models:
+You need **Python 3.10+** and **[Ollama](https://ollama.com)** (free). It works on
+Windows, macOS and Linux.
+
+1. **Install Ollama** from https://ollama.com and start it. Then download the models
+   (about 6.7 GB in total, one time only):
    ```
    ollama pull qwen2.5-coder:7b
    ollama pull llama3.2:3b
    ```
-   `qwen2.5-coder:7b` handles explain/fix. `llama3.2:3b` is the faster model for
-   plain questions. Change them in `.env` (see `.env.example`).
+   `qwen2.5-coder:7b` handles explain/fix. `llama3.2:3b` is the faster model for plain
+   questions. On a slower computer, use `qwen2.5-coder:3b` instead (see *Settings*).
 
-2. **Python environment**. This folder's `.venv` already has what's needed. On a new machine:
+2. **Install TURBO** with [pipx](https://pipx.pypa.io), which puts the `turbo` command
+   on your PATH in its own isolated environment:
    ```
-   python -m venv .venv
-   .venv\Scripts\python -m pip install -r requirements.txt
+   pip install --user pipx
+   python -m pipx ensurepath        # then open a new terminal
+   pipx install git+https://github.com/barikajb/turbo-ai
    ```
+   Without pipx: `pip install --user git+https://github.com/barikajb/turbo-ai`
 
-3. **Use `turbo` from any folder**: add this folder to your PATH (done on this PC). Then just type `turbo` to start chatting.
-   `turbo.cmd` runs `turbo.py` with the project's venv.
+3. **Check everything is ready**:
+   ```
+   turbo doctor
+   ```
+   It checks Ollama, the models and the server port, and tells you how to fix anything missing.
 
-4. *(Optional)* **Settings**: copy `.env.example` to `.env` and edit. Everything has a default.
+4. **Start chatting**: type `turbo`.
+
+To update later: `pipx upgrade turbo-ai`. To remove: `pipx uninstall turbo-ai`.
+
+### Settings
+
+Everything has a default. To change something, create `~/.turbo/.env` (on Windows,
+`C:\Users\<you>\.turbo\.env`) using [`.env.example`](.env.example) as a template, for example:
+```
+TURBO_CODE_MODEL=qwen2.5-coder:3b
+```
+Real environment variables override the file. `~/.turbo` also holds your conversation
+history (`turbo.db`). Set `TURBO_HOME` to use a different folder.
+
+### Developing TURBO (from a clone)
+
+```
+git clone https://github.com/barikajb/turbo-ai
+cd turbo-ai
+python -m venv .venv
+.venv\Scripts\python -m pip install -e .        # macOS/Linux: .venv/bin/python
+```
+`pip install -e .` installs the `turbo` command from your clone, so edits take effect
+immediately. On Windows you can instead add the clone to your PATH and use `turbo.cmd`.
 
 ## Terminal
 
@@ -48,6 +81,7 @@ turbo fix app.py -l 10-30 --apply               # asks y/N, then writes
 type app.py | turbo fix -                       # from stdin
 turbo chat                                      # interactive; /file app.py 10-30, /paste, /reset, /exit
 turbo reset                                     # forget the conversation
+turbo doctor                                    # check Ollama, models, port
 ```
 
 Follow-ups remember the conversation: run `turbo fix ...`, then
@@ -67,12 +101,12 @@ Exit codes: `0` ok, `1` model/Ollama error, `2` bad input.
    ```
    turbo serve
    ```
-   Or in VS Code run **TURBO: Start Server**. The first time, it asks you to pick this folder.
+   Or in VS Code run **TURBO: Start Server**, which runs `turbo serve` in a terminal.
 
-2. **Install the extension** (already done on this PC; repeat after editing it):
+2. **Install the extension**. Build it from a clone of this repo (no Node.js needed):
    ```
-   .venv\Scripts\python scripts\build_vsix.py
-   code --install-extension dist\turbo-ai-local-0.1.0.vsix --force
+   python scripts/build_vsix.py
+   code --install-extension dist/turbo-ai-local-0.2.0.vsix --force
    ```
    Then reload VS Code (*Developer: Reload Window*).
 
@@ -143,7 +177,8 @@ programs. Web pages are refused. Set `TURBO_TOKEN` to also require an
 ## Project layout
 
 ```
-turbo.py / turbo.cmd     CLI entry point
+turbo_core/cli.py        the `turbo` command (turbo.py / turbo.cmd run it from a clone)
+pyproject.toml           packaging (pip/pipx install)
 turbo_core/              config, Ollama client, prompts, diffing, history, assistant, server
 vscode-extension/        VS Code extension (plain JavaScript)
 scripts/build_vsix.py    packages the extension
