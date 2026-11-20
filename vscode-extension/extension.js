@@ -362,18 +362,19 @@ async function resetConversation() {
 }
 
 async function startServer() {
-  let projectPath = config().projectPath;
+  const projectPath = config().projectPath;
   if (!projectPath) {
-    const picked = await vscode.window.showOpenDialog({
-      canSelectFolders: true,
-      canSelectFiles: false,
-      openLabel: "Use this TURBO folder",
-      title: "Select the folder that contains turbo.py",
-    });
-    if (!picked || !picked[0]) return;
-    projectPath = picked[0].fsPath;
-    await vscode.workspace.getConfiguration("turbo").update("projectPath", projectPath, vscode.ConfigurationTarget.Global);
+    // Installed with pip/pipx: `turbo` is on PATH. Works in any shell.
+    const terminal = vscode.window.createTerminal({ name: "TURBO server" });
+    terminal.show(true);
+    terminal.sendText("turbo serve");
+    vscode.window.setStatusBarMessage(
+      "Starting TURBO server... (if 'turbo' isn't found, install it or set turbo.projectPath)",
+      8000
+    );
+    return;
   }
+  // Source checkout: run its venv directly.
   const isWindows = process.platform === "win32";
   const python = isWindows
     ? path.join(projectPath, ".venv", "Scripts", "python.exe")

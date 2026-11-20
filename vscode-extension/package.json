@@ -2,7 +2,7 @@
   "name": "turbo-ai-local",
   "displayName": "TURBO AI (local)",
   "description": "Ask, explain and fix code with your local TURBO assistant (Ollama). Nothing leaves your machine.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local",
   "license": "UNLICENSED",
   "private": true,
@@ -59,7 +59,7 @@
         "turbo.projectPath": {
           "type": "string",
           "default": "",
-          "description": "Folder containing turbo.py. Used by 'TURBO: Start Server'."
+          "description": "Only for a source checkout: folder containing turbo.py and .venv. Leave empty if you installed turbo with pip/pipx; Start Server then runs `turbo serve`."
         },
         "turbo.contextLines": {
           "type": "number",
