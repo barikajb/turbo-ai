@@ -221,9 +221,24 @@ def apply_fix(source: Source, fixed_code: str) -> None:
 
 # ---- commands ----------------------------------------------------------------
 
-def run_streamed(call, waiting_message: str, stream: bool) -> str:
+def fancy_terminal(args) -> bool:
+    """Use the rich UI only on a real interactive terminal."""
+    return (
+        not getattr(args, "plain", False)
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    )
+
+
+def run_streamed(call, waiting_message: str, stream: bool, fancy: bool = False) -> str:
     """Run an assistant call, streaming its answer to the terminal if enabled.
     Returns the full answer; prints it at the end when not streaming."""
+    if stream and fancy:
+        from turbo_core.ui import stream_call
+        from rich.console import Console
+
+        result, _ = stream_call(Console(highlight=False), call, waiting_message.rstrip("."))
+        return result
     if not stream:
         status(waiting_message)
         answer = call(None)
@@ -245,6 +260,7 @@ def cmd_ask(assistant: Assistant, args) -> int:
         lambda on_token: assistant.ask(question, session_id=args.session, context=context, on_token=on_token),
         "TURBO is thinking...",
         not args.no_stream,
+        fancy_terminal(args),
     )
     return 0
 
@@ -262,6 +278,7 @@ def cmd_explain(assistant: Assistant, args) -> int:
         ),
         f"Explaining {source.label} lines {source.start}-{source.end}...",
         not args.no_stream,
+        fancy_terminal(args),
     )
     return 0
 
@@ -314,6 +331,23 @@ def cmd_fix(assistant: Assistant, args) -> int:
 
 
 def cmd_chat(assistant: Assistant, args) -> int:
+    if fancy_terminal(args) and not args.no_stream:
+        from turbo_core.ui import ChatUI
+
+        return ChatUI(assistant, args.session, manager=make_manager(assistant)).run()
+    return plain_chat(assistant, args)
+
+
+def make_manager(assistant: Assistant):
+    """TURBO Manager for /manage, or None if it can't be loaded."""
+    try:
+        from turbo_core.manager import Manager
+    except ImportError:
+        return None
+    return Manager(assistant)
+
+
+def plain_chat(assistant: Assistant, args) -> int:
     print("TURBO chat - local coding assistant. Ask anything; follow-ups remember the conversation.")
     print("Commands: /file PATH [LINES]  /paste  /reset  /exit     (turbo --help for more)")
     pending_context: str | None = None
@@ -472,6 +506,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-s", "--session", default="cli", help="conversation name (default: cli)")
     parser.add_argument(
         "--no-stream", action="store_true", help="print answers all at once instead of word by word"
+    )
+    parser.add_argument(
+        "--plain", action="store_true", help="simple text output (no colors, banner or live rendering)"
     )
     parser.set_defaults(func=cmd_chat)  # plain `turbo` opens the chat
     sub = parser.add_subparsers(dest="command")
