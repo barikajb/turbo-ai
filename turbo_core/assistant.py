@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Iterator, Protocol
 
 from . import diffing, prompts
@@ -15,11 +15,13 @@ MAX_CONTEXT_CHARS = 8_000
 
 
 class ChatClient(Protocol):
-    def chat(self, messages: list[dict[str, str]], model: str, temperature: float = ...) -> str: ...
+    last_done_reason: str | None
 
-    def chat_stream(
-        self, messages: list[dict[str, str]], model: str, temperature: float = ...
-    ) -> Iterator[str]: ...
+    def chat(self, messages: list[dict[str, str]], model: str, temperature: float = ...,
+             max_tokens: int | None = ..., expected_output_chars: int = ...) -> str: ...
+
+    def chat_stream(self, messages: list[dict[str, str]], model: str, temperature: float = ...,
+                    max_tokens: int | None = ..., expected_output_chars: int = ...) -> Iterator[str]: ...
 
 
 OnToken = Callable[[str], None]
@@ -53,6 +55,8 @@ class Assistant:
         self.llm = llm
         self.store = store
         self.settings = settings
+        # True when the last answer stopped at the max_tokens cap.
+        self.last_reply_truncated = False
 
     @classmethod
     def from_settings(cls, settings: Settings | None = None) -> "Assistant":
@@ -61,8 +65,20 @@ class Assistant:
             base_url=settings.ollama_url,
             timeout=settings.timeout_seconds,
             context_tokens=settings.context_tokens,
+            max_context_tokens=settings.max_context_tokens,
+            keep_alive=settings.keep_alive,
         )
         return cls(llm, ConversationStore(settings.db_path), settings)
+
+    def set_models(self, chat: str | None = None, code: str | None = None) -> None:
+        """Switch models for this session (see config.save_setting to persist)."""
+        changes = {}
+        if chat:
+            changes["chat_model"] = chat
+        if code:
+            changes["code_model"] = code
+        if changes:
+            self.settings = replace(self.settings, **changes)
 
     # ---- public API -------------------------------------------------------
 
@@ -114,8 +130,11 @@ class Assistant:
         message = prompts.fix_message(
             diffing.dedent(code, shape), filename, lang, instruction, _trim_context(context)
         )
+        # No length cap: a cut-off fix can't become a diff. The context
+        # window is sized to fit the whole corrected code instead.
         reply = self._converse(
-            session_id, message, self.settings.code_model, temperature=0.1, on_token=on_token
+            session_id, message, self.settings.code_model, temperature=0.1, on_token=on_token,
+            max_tokens=None, expected_output_chars=len(code) + 600,
         )
 
         parsed = diffing.parse_fix_reply(reply)
@@ -158,6 +177,8 @@ class Assistant:
         model: str | None,
         temperature: float = 0.2,
         on_token: OnToken | None = None,
+        max_tokens: int | None | bool = True,
+        expected_output_chars: int = 0,
     ) -> str:
         """Send message with session history. model=None picks automatically:
         the code model if code is in play, otherwise the faster chat model.
@@ -169,14 +190,21 @@ class Assistant:
         if model is None:
             has_code = any("```" in m["content"] for m in messages[1:])
             model = self.settings.code_model if has_code else self.settings.chat_model
+        if max_tokens is True:
+            max_tokens = self.settings.max_tokens
+        options = dict(
+            model=model, temperature=temperature,
+            max_tokens=max_tokens or None, expected_output_chars=expected_output_chars,
+        )
         if on_token is None:
-            reply = self.llm.chat(messages, model=model, temperature=temperature)
+            reply = self.llm.chat(messages, **options)
         else:
             pieces = []
-            for piece in self.llm.chat_stream(messages, model=model, temperature=temperature):
+            for piece in self.llm.chat_stream(messages, **options):
                 pieces.append(piece)
                 on_token(piece)
             reply = "".join(pieces).strip()
+        self.last_reply_truncated = getattr(self.llm, "last_done_reason", None) == "length"
         # Saved only after a successful reply, so failures don't pollute history.
         self.store.add_exchange(session_id, message, reply)
         return reply

@@ -60,11 +60,20 @@ def _int_env(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class Settings:
     ollama_url: str = "http://localhost:11434"
+    # Small, fast defaults; switch with /model or TURBO_*_MODEL.
     chat_model: str = "llama3.2:3b"
-    code_model: str = "qwen2.5-coder:7b"
+    code_model: str = "qwen2.5-coder:3b"
     timeout_seconds: int = 300
-    context_tokens: int = 8192
-    history_chars: int = 12000
+    # Starting context window; grows up to max_context_tokens for big files.
+    context_tokens: int = 4096
+    max_context_tokens: int = 16384
+    # Answer length cap for questions/explanations (fixes are not capped,
+    # because a cut-off fix can't be turned into a diff).
+    max_tokens: int = 1200
+    # How long Ollama keeps the model loaded after a request.
+    keep_alive: str = "30m"
+    # Earlier conversation sent with each request. Less = faster on CPU.
+    history_chars: int = 6000
     db_path: Path = field(default_factory=lambda: turbo_home() / "turbo.db")
     host: str = "127.0.0.1"
     port: int = 8765
@@ -82,9 +91,39 @@ class Settings:
             code_model=os.environ.get("TURBO_CODE_MODEL", defaults.code_model),
             timeout_seconds=_int_env("TURBO_TIMEOUT", defaults.timeout_seconds),
             context_tokens=_int_env("TURBO_CONTEXT_TOKENS", defaults.context_tokens),
+            max_context_tokens=_int_env("TURBO_MAX_CONTEXT_TOKENS", defaults.max_context_tokens),
+            max_tokens=_int_env("TURBO_MAX_TOKENS", defaults.max_tokens),
+            keep_alive=os.environ.get("TURBO_KEEP_ALIVE", defaults.keep_alive),
             history_chars=_int_env("TURBO_HISTORY_CHARS", defaults.history_chars),
             db_path=Path(db_path) if db_path else defaults.db_path,
             host=os.environ.get("TURBO_HOST", defaults.host),
             port=_int_env("TURBO_PORT", defaults.port),
             token=os.environ.get("TURBO_TOKEN", defaults.token),
         )
+
+
+def save_setting(key: str, value: str, path: Path | None = None) -> Path:
+    """Set KEY=value in ~/.turbo/.env (creating it), keeping other lines.
+
+    Also updates os.environ so the new value applies right away.
+    """
+    if not key.startswith("TURBO_") or not key.replace("_", "").isalnum():
+        raise ValueError(f"Not a TURBO setting: {key!r}")
+    if "\n" in value or "\r" in value:
+        raise ValueError("Setting values can't contain line breaks.")
+    path = Path(path) if path else turbo_home() / ".env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    new_line = f"{key}={value}"
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("export "):
+            stripped = stripped[len("export "):]
+        if stripped.split("=", 1)[0].strip() == key:
+            lines[i] = new_line
+            break
+    else:
+        lines.append(new_line)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[key] = value
+    return path
