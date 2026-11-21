@@ -88,9 +88,9 @@ you can't share.
    ```
    pip install --user pipx
    python -m pipx ensurepath        # then open a new terminal
-   pipx install turbo-xi
+   pipx install turbo-eden.xi
    ```
-   Without pipx: `pip install turbo-xi`. The package is called **turbo-xi**; the command
+   Without pipx: `pip install turbo-eden.xi`. The package is called **turbo-eden.xi**; the command
    it installs is `turbo`. For the very latest version from GitHub:
    `pipx install git+https://github.com/barikajb/turbo-ai`
 
@@ -102,7 +102,7 @@ you can't share.
 
 4. **Start chatting**: type `turbo`.
 
-To update later: `pipx upgrade turbo-xi`. To remove: `pipx uninstall turbo-xi`.
+To update later: `pipx upgrade turbo-eden.xi`. To remove: `pipx uninstall turbo-eden.xi`.
 
 ### Settings
 
