@@ -88,9 +88,11 @@ you can't share.
    ```
    pip install --user pipx
    python -m pipx ensurepath        # then open a new terminal
-   pipx install git+https://github.com/barikajb/turbo-ai
+   pipx install turbo-xi
    ```
-   Without pipx: `pip install --user git+https://github.com/barikajb/turbo-ai`
+   Without pipx: `pip install turbo-xi`. The package is called **turbo-xi**; the command
+   it installs is `turbo`. For the very latest version from GitHub:
+   `pipx install git+https://github.com/barikajb/turbo-ai`
 
 3. **Check everything is ready**:
    ```
@@ -100,7 +102,7 @@ you can't share.
 
 4. **Start chatting**: type `turbo`.
 
-To update later: `pipx upgrade turbo-ai`. To remove: `pipx uninstall turbo-ai`.
+To update later: `pipx upgrade turbo-xi`. To remove: `pipx uninstall turbo-xi`.
 
 ### Settings
 
