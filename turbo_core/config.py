@@ -83,6 +83,9 @@ class Settings:
     provider: str = "ollama"
     api_key: str = field(default="", repr=False)  # never printed
     api_base: str = ""  # optional override of the provider's API URL
+    # Conversation history is kept in memory for the session only, unless
+    # this is turned on (TURBO_SAVE_HISTORY=1), which saves it to db_path.
+    save_history: bool = False
 
     @property
     def is_cloud(self) -> bool:
@@ -112,6 +115,7 @@ class Settings:
             provider=provider,
             api_key=_api_key(provider),
             api_base=os.environ.get("TURBO_API_BASE", "").strip(),
+            save_history=os.environ.get("TURBO_SAVE_HISTORY", "").strip().lower() in ("1", "true", "yes", "on"),
         )
 
 

@@ -7,7 +7,7 @@ from typing import Callable, Iterator, Protocol
 
 from . import diffing, prompts
 from .config import Settings
-from .conversation import ConversationStore
+from .conversation import ConversationStore, MemoryConversationStore
 from .llm import OllamaClient
 
 MAX_CODE_CHARS = 60_000
@@ -51,7 +51,8 @@ class FixResult:
 
 
 class Assistant:
-    def __init__(self, llm: ChatClient, store: ConversationStore, settings: Settings):
+    def __init__(self, llm: ChatClient, store: ConversationStore | MemoryConversationStore,
+                 settings: Settings):
         self.llm = llm
         self.store = store
         self.settings = settings
@@ -61,7 +62,9 @@ class Assistant:
     @classmethod
     def from_settings(cls, settings: Settings | None = None) -> "Assistant":
         settings = settings or Settings.from_env()
-        return cls(make_client(settings), ConversationStore(settings.db_path), settings)
+        # Session-only memory unless the user opted in to saving history.
+        store = ConversationStore(settings.db_path) if settings.save_history else MemoryConversationStore()
+        return cls(make_client(settings), store, settings)
 
     def set_models(self, chat: str | None = None, code: str | None = None) -> None:
         """Switch models for this session (see config.save_setting to persist)."""

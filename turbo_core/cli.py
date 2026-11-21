@@ -459,6 +459,8 @@ def cmd_doctor(assistant: Assistant | None, args, setup_error: str = "") -> int:
     print(f"TURBO {__version__} doctor\n")
     report(None, f"Python {sys.version.split()[0]}  ({sys.executable})")
     report(None, f"Data folder: {settings.db_path.parent}")
+    report(None, f"Conversation history: saved in {settings.db_path}" if settings.save_history
+           else "Conversation history: this session only (in memory, never saved to disk)")
 
     if settings.is_cloud:
         from turbo_core.cloud import provider_label

@@ -14,7 +14,7 @@ from typing import Any, Callable
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.history import FileHistory
+from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console, Group
 from rich.live import Live
@@ -304,7 +304,10 @@ class ChatUI:
         self.print_banner()
         self.warm(self.assistant.settings.chat_model)
         self.prompt = PromptSession(
-            history=FileHistory(str(home / "history")),
+            # Typed messages (Up arrow) are only remembered for this session,
+            # unless the user opted in to saving history.
+            history=FileHistory(str(home / "history")) if self.assistant.settings.save_history
+            else InMemoryHistory(),
             key_bindings=_key_bindings(),
             completer=SlashCompleter(),
             complete_while_typing=True,
