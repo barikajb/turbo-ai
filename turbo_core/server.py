@@ -6,6 +6,12 @@ Endpoints (all JSON):
     POST /explain  {code, filename?, language?, question?, context?, session_id?}
     POST /fix      {code, filename?, language?, instruction?, context?, session_id?, start_line?}
     POST /reset    {session_id?}
+    POST /choose   {decision_id, option}   answer a "free limit reached" question
+
+When a free cloud limit is reached, /ask, /explain and /fix answer 429 with
+{"error", "decision": {id, message, advice, options: [...]}}. The editor shows
+the options; for a "switch" it calls /choose and then repeats the request, for
+a "wait" it waits wait_seconds and repeats the request.
 
 Security: listens on 127.0.0.1 only by default. Requests from web pages are
 refused (browsers always send an Origin header; the VS Code extension does
@@ -25,7 +31,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import __version__
 from .assistant import Assistant, InputError
 from .config import Settings
-from .llm import LLMConnectionError, LLMError, LLMModelNotFound, LLMTimeout
+from .fallback import LimitReached, RequestCancelled
+from .llm import LLMConnectionError, LLMError, LLMModelNotFound, LLMRateLimited, LLMTimeout
 
 MAX_BODY_BYTES = 1_000_000
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -40,6 +47,10 @@ def _status_for(error: Exception) -> HTTPStatus:
         return HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(error, LLMTimeout):
         return HTTPStatus.GATEWAY_TIMEOUT
+    if isinstance(error, RequestCancelled):
+        return HTTPStatus.BAD_REQUEST
+    if isinstance(error, LLMRateLimited):
+        return HTTPStatus.TOO_MANY_REQUESTS
     if isinstance(error, LLMError):
         return HTTPStatus.BAD_GATEWAY
     return HTTPStatus.INTERNAL_SERVER_ERROR
@@ -108,8 +119,22 @@ def make_handler(assistant: Assistant, settings: Settings) -> type[BaseHTTPReque
     def reset(body: dict) -> dict:
         return {"cleared": assistant.reset(opt_str(body, "session_id") or "default")}
 
+    def choose(body: dict) -> dict:
+        llm = assistant.llm
+        if not hasattr(llm, "choose"):
+            raise InputError("There is no pending choice.")
+        decision_id = opt_str(body, "decision_id") or ""
+        option = body.get("option", 0)
+        if not isinstance(option, (int, str)) or isinstance(option, bool):
+            raise InputError("'option' must be an option number or kind.")
+        try:
+            chosen = llm.choose(decision_id, option)
+        except IndexError:
+            raise InputError("No such option.") from None
+        return {"ok": True, "option": chosen.to_dict()}
+
     get_routes = {"/health": health}
-    post_routes = {"/ask": ask, "/explain": explain, "/fix": fix, "/reset": reset}
+    post_routes = {"/ask": ask, "/explain": explain, "/fix": fix, "/reset": reset, "/choose": choose}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = f"TURBO/{__version__}"
@@ -167,6 +192,9 @@ def make_handler(assistant: Assistant, settings: Settings) -> type[BaseHTTPReque
         def dispatch(self, route, body: dict) -> None:
             try:
                 self.send_json(HTTPStatus.OK, route(body))
+            except LimitReached as stop:
+                self.send_json(HTTPStatus.TOO_MANY_REQUESTS,
+                               {"error": str(stop), "decision": stop.decision.to_dict()})
             except Exception as error:  # noqa: BLE001 - turn every failure into JSON
                 status = _status_for(error)
                 if status == HTTPStatus.INTERNAL_SERVER_ERROR:

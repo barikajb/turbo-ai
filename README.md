@@ -39,9 +39,35 @@ It works on Windows, macOS and Linux.
    shown or sent anywhere except to that provider.
 3. TURBO picks free models automatically and runs a test request.
 
-TURBO only ever uses free models (on OpenRouter, only models marked `:free`). When a
-provider's free daily limit runs out, TURBO tells you when it resets; nothing gets billed.
-Switch back to local any time with `turbo setup` → *Local Ollama*.
+TURBO only ever uses free models (on OpenRouter, only models marked `:free`). Nothing
+gets billed. Switch back to local any time with `turbo setup` → *Local Ollama*.
+
+**When a free limit is reached**, TURBO asks what to do, with estimated times:
+
+```
+⚠ qwen/qwen3.8-27b reached its free limit (resets in about 15s).
+  1. Continue now with openai/gpt-oss-120b                          ~1s to finish
+  2. Continue now with qwen2.5-coder:3b on this computer (...)      ~25s to finish
+  3. Wait for qwen/qwen3.8-27b                                      ~16s to finish
+  4. Cancel
+Continue? Choose 1-4 [1]:
+```
+
+- Limits are counted **per model**, so TURBO offers the provider's next-best free model,
+  then local Ollama (only if it's installed and running), then waiting for the reset.
+- A switch lasts until the original model's limit resets, then TURBO goes back to it.
+- Estimates come from the provider's reset timers and how fast each model has been
+  answering you.
+- A request too big for the free **per-minute** token limit is caught *before* it's
+  sent, with a recommendation to select less code. Only sharing the part you need help
+  with is the best way to stay within the free limits.
+- `/status` shows how many requests and tokens each model has left.
+- VS Code shows the same choices as a pop-up.
+
+**Conversation memory:** TURBO remembers the conversation only while it's running, so
+follow-ups work, but it is kept in memory and never saved to disk. Close TURBO (or the
+terminal) and it's gone. Set `TURBO_SAVE_HISTORY=1` if you'd rather keep history between
+sessions.
 
 **Privacy note:** in cloud mode, your questions and the code you share go to that provider.
 Google may use free-tier Gemini prompts to improve its products. Use local Ollama for code
@@ -200,7 +226,7 @@ Exit codes: `0` ok, `1` model/Ollama error, `2` bad input.
 2. **Install the extension**. Build it from a clone of this repo (no Node.js needed):
    ```
    python scripts/build_vsix.py
-   code --install-extension dist/turbo-ai-local-0.2.0.vsix --force
+   code --install-extension dist/turbo-ai-local-0.5.0.vsix --force
    ```
    Then reload VS Code (*Developer: Reload Window*).
 

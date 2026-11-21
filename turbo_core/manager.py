@@ -293,7 +293,7 @@ class Manager:
         seen: set[str] = set()
 
         for _ in range(self.max_steps):
-            reply = ui.wait(lambda: llm.chat_tools(messages, self.model, specs), "Thinking")
+            reply = self._ask_model(lambda: ui.wait(lambda: llm.chat_tools(messages, self.model, specs), "Thinking"))
             calls = extract_tool_calls(reply)
             if not calls:
                 return self.finish((reply.get("content") or "").strip() or "(no answer)")
@@ -314,12 +314,18 @@ class Manager:
                 break  # small models loop; answer with what we have
         return self.summarize(messages)
 
+    def _ask_model(self, call: Callable[[], Any]) -> Any:
+        """A model call; if a free limit is reached, the UI asks what to do."""
+        with_choices = getattr(self.ui, "with_choices", None)
+        return with_choices(call) if with_choices else call()
+
     def summarize(self, messages: list[dict[str, Any]]) -> str:
         """Ask for a final answer without tools (after a loop or too many steps)."""
         messages = messages + [{"role": "user", "content":
                                 "Stop using tools. Tell me in a few short sentences what you found and "
                                 "what was changed (only what the tool results confirm)."}]
-        reply = self.ui.wait(lambda: self.assistant.llm.chat_tools(messages, self.model, []), "Summing up")
+        reply = self._ask_model(lambda: self.ui.wait(
+            lambda: self.assistant.llm.chat_tools(messages, self.model, []), "Summing up"))
         return self.finish((reply.get("content") or "").strip() or "(no answer)")
 
     def call_tool(self, name: str, args: dict[str, Any]) -> Any:

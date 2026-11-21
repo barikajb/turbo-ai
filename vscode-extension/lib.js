@@ -2,12 +2,14 @@
 "use strict";
 
 class TurboError extends Error {
-  constructor(message, { status = 0, serverDown = false, cancelled = false } = {}) {
+  constructor(message, { status = 0, serverDown = false, cancelled = false, decision = null } = {}) {
     super(message);
     this.name = "TurboError";
     this.status = status;
     this.serverDown = serverDown;
     this.cancelled = cancelled;
+    // Set when a free cloud limit was reached: what the user can do instead.
+    this.decision = decision;
   }
 }
 
@@ -63,6 +65,7 @@ async function callServer({ baseUrl, path, body, token, timeoutMs, signal, fetch
   if (!response.ok) {
     throw new TurboError(data && data.error ? data.error : `HTTP ${response.status}`, {
       status: response.status,
+      decision: data && data.decision ? data.decision : null,
     });
   }
   return data;
@@ -137,6 +140,24 @@ function renderMarkdown(markdown) {
   return html.replace(/<div class="text"><\/div>/g, "");
 }
 
+function formatSeconds(seconds) {
+  const s = Math.max(0, Number(seconds) || 0);
+  if (s < 1) return "<1s";
+  if (s < 90) return `${Math.round(s)}s`;
+  if (s < 5400) return `${Math.round(s / 60)} min`;
+  return `${(s / 3600).toFixed(1)} h`;
+}
+
+/** Quick-pick items for a "free limit reached" decision. */
+function decisionItems(decision) {
+  return (decision.options || []).map((option, index) => ({
+    label: option.label,
+    description: option.kind === "cancel" ? "" : `~${formatSeconds(option.estimate_seconds)} to finish`,
+    index,
+    option,
+  }));
+}
+
 function sessionIdFor(workspaceName) {
   return `vscode:${workspaceName || "default"}`;
 }
@@ -149,4 +170,6 @@ module.exports = {
   escapeHtml,
   renderMarkdown,
   sessionIdFor,
+  formatSeconds,
+  decisionItems,
 };

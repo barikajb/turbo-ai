@@ -62,8 +62,8 @@ NOT_CHAT = re.compile(r"whisper|tts|speech|audio|guard|embed|moderation|image|vi
 # Preference order when picking models automatically (first match wins).
 CODE_PREFERENCE = [r"qwen.*coder", r"devstral|codestral", r"qwen3", r"gpt-oss-120b", r"kimi",
                    r"deepseek", r"llama.*70b", r"gemini-[\d.]+-flash(?!-lite)", r"gpt-oss", r"gemini", r"qwen"]
-CHAT_PREFERENCE = [r"gpt-oss-20b", r"llama.*(8b|instant)", r"gemini-[\d.]+-flash-lite",
-                   r"gemini-[\d.]+-flash", r"qwen3", r"gpt-oss", r"llama", r"gemini", r"qwen", r"mistral"]
+CHAT_PREFERENCE = [r"gpt-oss-20b", r"gpt-oss", r"llama.*(8b|instant)", r"gemini-[\d.]+-flash-lite",
+                   r"gemini-[\d.]+-flash", r"qwen3", r"llama", r"gemini", r"qwen", r"mistral"]
 
 
 def provider_label(provider: str) -> str:
@@ -81,6 +81,17 @@ def usable_models(provider: str, model_ids: list[str]) -> list[str]:
             continue
         usable.append(model_id)
     return sorted(usable)
+
+
+def rank_models(provider: str, model_ids: list[str], role: str) -> list[str]:
+    """All usable models, best first for this role ('chat' or 'code')."""
+    usable = usable_models(provider, model_ids)
+    ranked: list[str] = []
+    for pattern in CODE_PREFERENCE if role == "code" else CHAT_PREFERENCE:
+        for model_id in usable:
+            if model_id not in ranked and re.search(pattern, model_id, re.IGNORECASE):
+                ranked.append(model_id)
+    return ranked + [m for m in usable if m not in ranked]
 
 
 def pick_models(provider: str, model_ids: list[str]) -> tuple[str | None, str | None]:
@@ -156,6 +167,7 @@ class OpenAICompatClient:
         self.http = session or requests.Session()
         self.last_done_reason: str | None = None
         self.is_cloud = True
+        self.limits: dict[str, dict[str, Any]] = {}  # per model, from response headers
 
     def __repr__(self) -> str:  # never show the key
         return f"OpenAICompatClient(provider={self.provider!r}, base_url={self.base_url!r})"
@@ -298,14 +310,51 @@ class OpenAICompatClient:
                     continue
                 raise LLMConnectionError(
                     f"Can't reach {self.label}. Check your internet connection.") from error
+        self._record_limits(model, response)
         self._raise_for_status(response, model)
         return response
+
+    def _record_limits(self, model: str, response: requests.Response) -> None:
+        """Remember the free-tier limits the provider reports in its headers."""
+        headers = getattr(response, "headers", None) or {}
+        try:
+            if not any(str(k).lower().startswith("x-ratelimit") for k in headers):
+                return
+        except TypeError:
+            return
+
+        def number(name: str) -> int | None:
+            value = headers.get(name)
+            try:
+                return int(float(value)) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        self.limits[model] = {
+            "limit_requests": number("x-ratelimit-limit-requests"),
+            "remaining_requests": number("x-ratelimit-remaining-requests"),
+            "reset_requests": parse_duration(headers.get("x-ratelimit-reset-requests")),
+            "limit_tokens": number("x-ratelimit-limit-tokens"),
+            "remaining_tokens": number("x-ratelimit-remaining-tokens"),
+            "reset_tokens": parse_duration(headers.get("x-ratelimit-reset-tokens")),
+            "at": time.monotonic(),
+        }
 
     def _raise_for_status(self, response: requests.Response, model: str | None) -> None:
         status = response.status_code
         if status < 400:
             return
         detail = _error_detail(response)
+        if status in (413, 400, 429):
+            # "Request too large ... tokens per minute (TPM): Limit 8000, Requested 9200"
+            sizes = re.search(r"Limit\s+(\d+),\s*Requested\s+(\d+)", detail)
+            if sizes and (status == 413 or "per minute" in detail.lower() or "TPM" in detail):
+                error = LLMInputTooLarge(
+                    f"This request is about {int(sizes.group(2)):,} tokens, more than {model}'s free "
+                    f"limit of {int(sizes.group(1)):,} tokens per minute. Selecting less code keeps "
+                    "it within the free limit.")
+                error.model, error.limit, error.requested = model, int(sizes.group(1)), int(sizes.group(2))
+                raise error
         if status in (401, 403):
             raise LLMAuthError(f"{self.label} rejected the API key ({detail}). Run: turbo setup")
         if status == 402:
@@ -316,10 +365,17 @@ class OpenAICompatClient:
         if status == 413 or (status == 400 and "context" in detail.lower()):
             raise LLMInputTooLarge(f"That's too much text for {model}. Select less code or run /clear.")
         if status == 429:
-            wait = response.headers.get("retry-after")
+            wait = parse_duration(response.headers.get("retry-after"))
+            if wait is None:
+                info = self.limits.get(model, {})
+                waits = [info.get("reset_requests") if info.get("remaining_requests") == 0 else None,
+                         info.get("reset_tokens")]
+                wait = max((w for w in waits if w is not None), default=None)
             when = f" Try again in about {_human_seconds(wait)}." if wait else " Try again later."
-            raise LLMRateLimited(f"{self.label}'s free limit was reached ({detail}).{when} "
-                                 "Or switch to another model with /model; limits are per model.")
+            error = LLMRateLimited(f"{model} reached {self.label}'s free limit ({detail}).{when} "
+                                   "Or switch to another model with /model; limits are per model.")
+            error.model, error.retry_after = model, wait
+            raise error
         raise LLMBadResponse(f"{self.label} returned HTTP {status}: {detail}")
 
     def _json(self, response: requests.Response) -> dict[str, Any]:
@@ -356,11 +412,29 @@ def _error_detail(response: requests.Response) -> str:
     return str(data)[:200]
 
 
-def _human_seconds(value: str) -> str:
+def parse_duration(value: Any) -> float | None:
+    """Seconds from '120', '1.5', '547ms', '4m19.2s' or '1h2m3s' (None if unknown)."""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    parts = re.findall(r"(\d+(?:\.\d+)?)(ms|h|m|s)", text)
+    if not parts or "".join(n + u for n, u in parts) != text.replace(" ", ""):
+        return None
+    scale = {"h": 3600, "m": 60, "s": 1, "ms": 0.001}
+    return sum(float(n) * scale[u] for n, u in parts)
+
+
+def _human_seconds(value: Any) -> str:
     try:
         seconds = float(value)
     except (TypeError, ValueError):
-        return value
+        return str(value)
     if seconds < 90:
         return f"{seconds:.0f} seconds"
     if seconds < 5400:

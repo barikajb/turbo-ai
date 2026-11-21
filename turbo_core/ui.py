@@ -76,11 +76,13 @@ class _StreamView:
         self.label = label
         self.start = time.monotonic()
         self.spinner = Spinner("dots", style=ACCENT)
+        self.show_elapsed = True
 
     def __rich_console__(self, console, options):
         elapsed = time.monotonic() - self.start
         if not self.text.strip():
-            self.spinner.update(text=Text(f" {self.label}... {elapsed:.0f}s", style=DIM))
+            suffix = f"... {elapsed:.0f}s" if self.show_elapsed else ""
+            self.spinner.update(text=Text(f" {self.label}{suffix}", style=DIM))
             yield self.spinner
             return
         self.spinner.update(text=" ")  # rich ignores "", so use a space to drop the label
@@ -344,22 +346,82 @@ class ChatUI:
         context = self.pending_context
         self.console.print(Text("◆ TURBO", style=f"bold {ACCENT}"))
         try:
-            result, _ = stream_call(
+            result, _ = self.with_choices(lambda: stream_call(
                 self.console,
                 lambda on_token: self.assistant.ask(
                     question, session_id=self.session_id, context=context, on_token=on_token
                 ),
-            )
+            ))
         except (LLMError, InputError) as error:
             self.error(error)
             return
         if result is not None:
             self.pending_context = None
             self.pending_label = ""
+            self.route_note()
             if self.assistant.last_reply_truncated:
                 self.note(f"(answer cut off at {self.assistant.settings.max_tokens} tokens: "
                           "ask \"continue\", or raise TURBO_MAX_TOKENS)")
         self.console.print()
+
+    # -- free-limit fallback
+
+    def with_choices(self, func: Callable[[], Any]) -> Any:
+        """Run func; if a free limit is reached, ask what to do and retry."""
+        llm = self.assistant.llm
+        if not hasattr(llm, "choose"):
+            return func()
+        from .fallback import run_with_choices
+
+        return run_with_choices(func, llm, self.choose, self.countdown)
+
+    def choose(self, decision) -> Any:
+        """Show the options for a reached limit and return the user's pick."""
+        from .fallback import format_seconds
+
+        self.console.print(Text(f"⚠ {decision.message}", style="yellow"))
+        if decision.advice:
+            self.console.print(Text(f"  {decision.advice}", style="yellow"))
+        if [o.kind for o in decision.options] == ["cancel"]:
+            self.note("  No other free model can take this request right now.")
+            return None
+        width = max(len(o.label) for o in decision.options)
+        for number, option in enumerate(decision.options, 1):
+            when = "" if option.kind == "cancel" else f"~{format_seconds(option.estimate_seconds)} to finish"
+            self.console.print(Text.assemble((f"  {number}. ", "cyan"), (option.label.ljust(width + 3), ""),
+                                             (when, DIM)))
+        while True:
+            try:
+                answer = self.console.input(f"[yellow]Continue? Choose 1-{len(decision.options)} [1]:[/yellow] ")
+            except (KeyboardInterrupt, EOFError):
+                self.console.print()
+                return None
+            answer = answer.strip() or "1"
+            if answer.isdigit() and 1 <= int(answer) <= len(decision.options):
+                option = decision.options[int(answer) - 1]
+                return None if option.kind == "cancel" else option
+            self.note(f"Please type a number from 1 to {len(decision.options)}.")
+
+    def countdown(self, seconds: float, model: str = "") -> None:
+        """Wait with a visible countdown. Ctrl+C cancels."""
+        from .fallback import RequestCancelled
+
+        end = time.monotonic() + seconds
+        view = _StreamView(f"Waiting for {model or 'the free limit'} to reset")
+        view.show_elapsed = False
+        try:
+            with Live(view, console=self.console, refresh_per_second=8, transient=True):
+                while time.monotonic() < end:
+                    view.label = (f"Waiting for {model or 'the free limit'} to reset: "
+                                  f"{end - time.monotonic():.0f}s left")
+                    time.sleep(0.1)
+        except KeyboardInterrupt:
+            raise RequestCancelled("Cancelled.") from None
+
+    def route_note(self) -> None:
+        note = getattr(self.assistant.llm, "last_route_note", None)
+        if note:
+            self.note(f"({note})")
 
     # -- slash commands
 
@@ -499,6 +561,9 @@ class ChatUI:
     def cmd_status(self, _rest: str) -> None:
         snap = system.snapshot(self.assistant, cpu_sample_seconds=0.3)
         self.print_status_line(snap)
+        self.print_limits()
+        if snap.is_cloud:
+            return
         if snap.cpu_percent is not None:
             self.note(f"  CPU {snap.cpu_percent:.0f}% busy · {snap.cpu_cores} cores · {snap.os_name}"
                       f" · context window {snap.context_tokens} tokens")
@@ -512,6 +577,30 @@ class ChatUI:
                 self.console.print(Text(f"  • {tip}"))
         else:
             self.note("No speed problems found.", style="green")
+
+    def print_limits(self) -> None:
+        """Free-tier usage left per model (cloud only), from the provider's headers."""
+        report = getattr(self.assistant.llm, "limits_report", None)
+        if report is None:
+            return
+        from .fallback import format_seconds
+
+        rows = report()
+        if not rows:
+            self.note("  Free limits: shown here after your first question.")
+            return
+        table = Table(box=None, padding=(0, 2), header_style=DIM)
+        for column in ("model", "requests left today", "tokens left this minute", "status"):
+            table.add_column(column)
+        for row in rows:
+            def left(remaining, limit):
+                return "?" if remaining is None else f"{remaining:,} / {limit:,}" if limit else f"{remaining:,}"
+            cooling = row.get("cooling_seconds", 0)
+            state = f"at limit, resets in {format_seconds(cooling)}" if cooling > 0 else "ok"
+            table.add_row(row["model"], left(row.get("remaining_requests"), row.get("limit_requests")),
+                          left(row.get("remaining_tokens"), row.get("limit_tokens")), state,
+                          style="yellow" if cooling > 0 else None)
+        self.console.print(table)
 
     def cmd_file(self, rest: str) -> None:
         from .cli import load_source

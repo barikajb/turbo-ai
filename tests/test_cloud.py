@@ -152,7 +152,10 @@ class SettingsTests(unittest.TestCase):
 
     def test_make_client_picks_backend(self):
         cloud_client = make_client(Settings(provider="groq", api_key="k", db_path=temp_dir(self) / "x.db"))
-        self.assertIsInstance(cloud_client, cloud.OpenAICompatClient)
+        from turbo_core.fallback import FallbackClient
+
+        self.assertIsInstance(cloud_client, FallbackClient)
+        self.assertIsInstance(cloud_client.primary, cloud.OpenAICompatClient)
         local = make_client(Settings(db_path=temp_dir(self) / "x.db"))
         self.assertEqual(type(local).__name__, "OllamaClient")
 

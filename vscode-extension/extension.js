@@ -90,7 +90,7 @@ function render() {
 
 // ---- server calls -----------------------------------------------------------
 
-async function call(pathName, body, title) {
+async function callOnce(pathName, body, title) {
   const cfg = config();
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title, cancellable: true },
@@ -106,6 +106,67 @@ async function call(pathName, body, title) {
         signal: controller.signal,
       });
     }
+  );
+}
+
+/**
+ * Call the server. If a free cloud limit is reached, ask the user what to do
+ * (switch model now / wait for the reset / cancel) and retry as chosen.
+ */
+async function call(pathName, body, title) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await callOnce(pathName, body, title);
+    } catch (error) {
+      if (!(error instanceof lib.TurboError) || !error.decision) throw error;
+      const decision = error.decision;
+      const items = lib.decisionItems(decision);
+      if (items.length === 0 || items.every((i) => i.option.kind === "cancel")) {
+        throw new lib.TurboError(`${decision.message} ${decision.advice || ""}`.trim());
+      }
+      const picked = await vscode.window.showQuickPick(items, {
+        title: `TURBO: ${decision.message}`,
+        placeHolder: decision.advice || "Continue with the request?",
+        ignoreFocusOut: true,
+      });
+      if (!picked || picked.option.kind === "cancel") {
+        throw new lib.TurboError("Cancelled.", { cancelled: true });
+      }
+      const cfg = config();
+      await lib.callServer({
+        baseUrl: cfg.serverUrl,
+        path: "/choose",
+        body: { decision_id: decision.id, option: picked.index },
+        token: cfg.token,
+        timeoutMs: 10000,
+      });
+      if (picked.option.kind === "wait" && picked.option.wait_seconds > 0) {
+        await waitWithCountdown(picked.option.wait_seconds, picked.option.model);
+      }
+    }
+  }
+  throw new lib.TurboError("Still at the free limit after several tries. Try again later.");
+}
+
+function waitWithCountdown(seconds, model) {
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Waiting for ${model} to reset`, cancellable: true },
+    (progress, token) =>
+      new Promise((resolve, reject) => {
+        const end = Date.now() + seconds * 1000;
+        const timer = setInterval(() => {
+          const left = Math.max(0, (end - Date.now()) / 1000);
+          progress.report({ message: `${Math.ceil(left)}s left` });
+          if (left <= 0) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 500);
+        token.onCancellationRequested(() => {
+          clearInterval(timer);
+          reject(new lib.TurboError("Cancelled.", { cancelled: true }));
+        });
+      })
   );
 }
 

@@ -2,7 +2,7 @@
   "name": "turbo-ai-local",
   "displayName": "TURBO AI (local)",
   "description": "Ask, explain and fix code with your local TURBO assistant (Ollama). Nothing leaves your machine.",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "publisher": "local",
   "license": "UNLICENSED",
   "private": true,

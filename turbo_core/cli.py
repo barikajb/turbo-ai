@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -230,25 +231,90 @@ def fancy_terminal(args) -> bool:
     )
 
 
-def run_streamed(call, waiting_message: str, stream: bool, fancy: bool = False) -> str:
-    """Run an assistant call, streaming its answer to the terminal if enabled.
-    Returns the full answer; prints it at the end when not streaming."""
-    if stream and fancy:
-        from turbo_core.ui import stream_call
-        from rich.console import Console
+def ask_choice(decision):
+    """Free limit reached: show the options and ask (or pick the first one
+    automatically when there's no one to ask, e.g. in a script)."""
+    from turbo_core.fallback import format_seconds
 
-        result, _ = stream_call(Console(highlight=False), call, waiting_message.rstrip("."))
+    print(f"\n⚠ {decision.message}", file=sys.stderr)
+    if decision.advice:
+        print(f"  {decision.advice}", file=sys.stderr)
+    options = decision.options
+    if [o.kind for o in options] == ["cancel"]:
+        print("  No other free model can take this request right now.", file=sys.stderr)
+        return None
+    for number, option in enumerate(options, 1):
+        when = "" if option.kind == "cancel" else f"   ~{format_seconds(option.estimate_seconds)} to finish"
+        print(f"  {number}. {option.label}{when}", file=sys.stderr)
+    if not sys.stdin.isatty():
+        first = options[0]
+        print(f"  (not interactive: choosing 1. {first.label})", file=sys.stderr)
+        return None if first.kind == "cancel" else first
+    while True:
+        try:
+            answer = input(f"Continue? Choose 1-{len(options)} [1]: ").strip() or "1"
+        except EOFError:
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            option = options[int(answer) - 1]
+            return None if option.kind == "cancel" else option
+        print(f"Please type a number from 1 to {len(options)}.", file=sys.stderr)
+
+
+def wait_for_reset(seconds: float, model: str) -> None:
+    status(f"Waiting {seconds:.0f}s for {model or 'the free limit'} to reset... (Ctrl+C to cancel)")
+    time.sleep(seconds)
+
+
+def with_choices(assistant: Assistant, call):
+    """Run call; on a free limit, ask what to do and retry."""
+    llm = assistant.llm
+    if not hasattr(llm, "choose"):
+        return call()
+    from turbo_core.fallback import run_with_choices
+
+    return run_with_choices(call, llm, ask_choice, wait_for_reset)
+
+
+def print_route_note(assistant: Assistant) -> None:
+    note = getattr(assistant.llm, "last_route_note", None)
+    if note:
+        status(f"({note})")
+
+
+def run_streamed(call, waiting_message: str, stream: bool, fancy: bool = False,
+                 assistant: Assistant | None = None) -> str:
+    """Run an assistant call, streaming its answer to the terminal if enabled.
+    Returns the full answer; prints it at the end when not streaming.
+    If a free limit is reached, the user is asked what to do."""
+    if assistant is not None and fancy and stream:
+        from turbo_core.ui import ChatUI, stream_call
+
+        ui = ChatUI(assistant, "cli")
+        result, _ = ui.with_choices(lambda: stream_call(ui.console, call, waiting_message.rstrip(".")))
+        ui.route_note()
         return result
+    retry = (lambda attempt: with_choices(assistant, attempt)) if assistant is not None else (lambda a: a())
+
     if not stream:
-        status(waiting_message)
-        answer = call(None)
+        def attempt():
+            status(waiting_message)
+            return call(None)
+
+        answer = retry(attempt)
         print(answer)
-        return answer
-    printer = StreamPrinter(waiting_message)
-    try:
-        return call(printer)
-    finally:
-        printer.finish()
+    else:
+        def attempt():
+            printer = StreamPrinter(waiting_message)
+            try:
+                return call(printer)
+            finally:
+                printer.finish()
+
+        answer = retry(attempt)
+    if assistant is not None:
+        print_route_note(assistant)
+    return answer
 
 
 def cmd_ask(assistant: Assistant, args) -> int:
@@ -261,6 +327,7 @@ def cmd_ask(assistant: Assistant, args) -> int:
         "TURBO is thinking...",
         not args.no_stream,
         fancy_terminal(args),
+        assistant=assistant,
     )
     return 0
 
@@ -279,6 +346,7 @@ def cmd_explain(assistant: Assistant, args) -> int:
         f"Explaining {source.label} lines {source.start}-{source.end}...",
         not args.no_stream,
         fancy_terminal(args),
+        assistant=assistant,
     )
     return 0
 
@@ -296,19 +364,24 @@ def cmd_fix(assistant: Assistant, args) -> int:
 
     if args.no_stream:
         status(waiting)
-        result = assistant.fix(source.selection, **fix_kwargs)
+        result = with_choices(assistant, lambda: assistant.fix(source.selection, **fix_kwargs))
         print(result.explanation, end="\n\n")
     else:
-        printer = StreamPrinter(waiting)
-        explanation = FixExplanationFilter(printer)
-        try:
-            result = assistant.fix(source.selection, on_token=explanation, **fix_kwargs)
-            explanation.finish()
-        finally:
-            printer.finish()
-        if not printer.started:  # nothing streamed (unexpected format)
-            print(result.explanation)
-        print()
+        def attempt():
+            printer = StreamPrinter(waiting)
+            explanation = FixExplanationFilter(printer)
+            try:
+                fixed = assistant.fix(source.selection, on_token=explanation, **fix_kwargs)
+                explanation.finish()
+            finally:
+                printer.finish()
+            if not printer.started:  # nothing streamed (unexpected format)
+                print(fixed.explanation)
+            print()
+            return fixed
+
+        result = with_choices(assistant, attempt)
+    print_route_note(assistant)
     for warning in result.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
     if not result.changed:
@@ -400,6 +473,7 @@ def plain_chat(assistant: Assistant, args) -> int:
                 ),
                 "thinking...",
                 not args.no_stream,
+                assistant=assistant,
             )
             pending_context = None
         except (LLMError, InputError) as error:

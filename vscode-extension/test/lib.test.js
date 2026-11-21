@@ -141,3 +141,32 @@ test("callServer: unreadable reply", async () => {
     /unreadable/
   );
 });
+
+test("callServer passes the free-limit decision through", async () => {
+  const decision = { id: "d1", message: "m reached its free limit", options: [{ kind: "switch", label: "Continue now with x", estimate_seconds: 2.5 }] };
+  await assert.rejects(
+    lib.callServer({
+      baseUrl: "http://x", path: "/ask", body: {}, timeoutMs: 1000,
+      fetchImpl: async () => fakeResponse(429, { error: "limit", decision }),
+    }),
+    (err) => err.status === 429 && err.decision && err.decision.id === "d1"
+  );
+});
+
+test("decisionItems shows estimates and keeps option indexes", () => {
+  const items = lib.decisionItems({ options: [
+    { kind: "switch", label: "Continue now with b", estimate_seconds: 2.4 },
+    { kind: "wait", label: "Wait for a", estimate_seconds: 95 },
+    { kind: "cancel", label: "Cancel" },
+  ] });
+  assert.equal(items[0].description, "~2s to finish");
+  assert.equal(items[1].description, "~2 min to finish");
+  assert.equal(items[2].description, "");
+  assert.deepEqual(items.map((i) => i.index), [0, 1, 2]);
+});
+
+test("formatSeconds", () => {
+  assert.equal(lib.formatSeconds(0.2), "<1s");
+  assert.equal(lib.formatSeconds(38), "38s");
+  assert.equal(lib.formatSeconds(7200), "2.0 h");
+});

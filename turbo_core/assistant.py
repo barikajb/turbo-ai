@@ -64,7 +64,10 @@ class Assistant:
         settings = settings or Settings.from_env()
         # Session-only memory unless the user opted in to saving history.
         store = ConversationStore(settings.db_path) if settings.save_history else MemoryConversationStore()
-        return cls(make_client(settings), store, settings)
+        assistant = cls(make_client(settings), store, settings)
+        if hasattr(assistant.llm, "bind"):  # fallback chain needs to know chat vs code
+            assistant.llm.bind(lambda: assistant.settings)
+        return assistant
 
     def set_models(self, chat: str | None = None, code: str | None = None) -> None:
         """Switch models for this session (see config.save_setting to persist)."""
@@ -208,16 +211,28 @@ class Assistant:
 
 def make_client(settings: Settings):
     """Local Ollama, or a cloud provider's API (see turbo setup)."""
+    def local() -> OllamaClient:
+        return OllamaClient(
+            base_url=settings.ollama_url,
+            timeout=settings.timeout_seconds,
+            context_tokens=settings.context_tokens,
+            max_context_tokens=settings.max_context_tokens,
+            keep_alive=settings.keep_alive,
+        )
+
     if settings.is_cloud:
         from .cloud import OpenAICompatClient
+        from .fallback import FallbackClient
 
-        return OpenAICompatClient(
+        cloud = OpenAICompatClient(
             provider=settings.provider,
             api_key=settings.api_key,
             base_url=settings.api_base or None,
             timeout=min(settings.timeout_seconds, 180),
             max_context_tokens=max(settings.max_context_tokens, 32768),
         )
+        # Free-limit fallback: other free models, then local Ollama if installed.
+        return FallbackClient(cloud, local_factory=local)
     return OllamaClient(
         base_url=settings.ollama_url,
         timeout=settings.timeout_seconds,
