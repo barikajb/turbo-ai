@@ -494,6 +494,17 @@ def cmd_doctor(assistant: Assistant, args) -> int:
     return 0
 
 
+def cmd_manage(assistant: Assistant, args) -> int:
+    from turbo_core.manager import Manager
+    from turbo_core.ui import ChatUI
+
+    if not sys.stdin.isatty():
+        raise InputError("turbo manage asks before changing anything, so it needs an interactive terminal.")
+    ui = ChatUI(assistant, args.session)
+    Manager(assistant).run(" ".join(args.task), ui=ui)
+    return 0
+
+
 def cmd_serve(_assistant: Assistant, args) -> int:
     from turbo_core.server import serve
 
@@ -542,6 +553,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="check that Ollama, the models and the server port are ready")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("manage", help="ask TURBO Manager to diagnose, optimize or fix the setup")
+    p.add_argument("task", nargs="+", help="e.g. \"it's too slow\"")
+    p.set_defaults(func=cmd_manage)
 
     p = sub.add_parser("serve", help="run the local HTTP server for the VS Code extension")
     p.set_defaults(func=cmd_serve)

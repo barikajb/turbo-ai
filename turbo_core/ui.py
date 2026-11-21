@@ -248,6 +248,41 @@ class ChatUI:
     def note(self, text: str, style: str = DIM) -> None:
         self.console.print(Text(text, style=style))
 
+    def markdown(self, text: str) -> None:
+        self.console.print(Markdown(text))
+
+    def show_diff(self, diff: str) -> None:
+        from rich.syntax import Syntax
+
+        self.console.print(Syntax(diff or "(no changes)", "diff", theme="ansi_dark", background_color="default"))
+
+    def show_output(self, text: str) -> None:
+        if text.strip():
+            self.console.print(Text(text.rstrip(), style=DIM))
+
+    def wait(self, func: Callable[[], Any], label: str = "Working") -> Any:
+        """Run func in a worker thread with a spinner; Ctrl+C raises KeyboardInterrupt
+        right away instead of waiting for func to finish."""
+        done: queue.Queue = queue.Queue()
+
+        def worker() -> None:
+            try:
+                done.put((True, func()))
+            except BaseException as error:  # noqa: BLE001 - handed to the main thread
+                done.put((False, error))
+
+        threading.Thread(target=worker, daemon=True).start()
+        view = _StreamView(label)
+        with Live(view, console=self.console, refresh_per_second=12, transient=True):
+            while True:
+                try:
+                    ok, value = done.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if ok:
+                    return value
+                raise value
+
     def confirm(self, question: str, default: bool = False) -> bool:
         hint = "[Y/n]" if default else "[y/N]"
         try:

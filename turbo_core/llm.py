@@ -235,6 +235,29 @@ class OllamaClient:
             })
         return loaded
 
+    def unload(self, name: str) -> None:
+        """Remove a model from memory now (frees RAM; it stays installed)."""
+        try:
+            response = self.http.post(
+                f"{self.base_url}/api/generate", json={"model": name, "keep_alive": 0}, timeout=30
+            )
+        except requests.exceptions.RequestException as error:
+            raise LLMConnectionError(f"Can't reach Ollama at {self.base_url}.") from error
+        if response.status_code == 404:
+            raise LLMModelNotFound(f"Model '{name}' is not installed.")
+        if response.status_code >= 400:
+            raise LLMBadResponse(f"Couldn't unload {name}: {_error_detail(response)}")
+
+    def supports_tools(self, name: str) -> bool | None:
+        """Whether Ollama says this model can call tools (None if unknown)."""
+        try:
+            response = self.http.post(f"{self.base_url}/api/show", json={"model": name}, timeout=10)
+            response.raise_for_status()
+            capabilities = response.json().get("capabilities")
+        except (requests.exceptions.RequestException, ValueError):
+            return None
+        return None if capabilities is None else "tools" in capabilities
+
     def pull(self, name: str, on_progress: Callable[[str, int, int], None] | None = None) -> None:
         """Download a model. on_progress(status, completed_bytes, total_bytes)."""
         try:

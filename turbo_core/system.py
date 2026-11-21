@@ -113,13 +113,14 @@ def speed_tips(snap: Snapshot) -> list[str]:
     if not snap.ollama_ok:
         return ["Ollama isn't running. Start the Ollama app (or run `ollama serve`)."]
 
+    cpu_only = [m["name"] for m in snap.loaded if m["gpu_percent"] == 0]
+    if cpu_only:
+        names = " and ".join(cpu_only)
+        verb = "runs" if len(cpu_only) == 1 else "run"
+        tips.append(f"{names} {verb} 100% on the CPU (no GPU Ollama can use), so smaller models "
+                    "are the biggest speed win here.")
     for m in snap.loaded:
-        if m["gpu_percent"] == 0:
-            tips.append(
-                f"{m['name']} runs 100% on the CPU (no GPU Ollama can use). Smaller models "
-                "are the biggest speed win here."
-            )
-        elif m["gpu_percent"] < 100:
+        if 0 < m["gpu_percent"] < 100:
             tips.append(
                 f"{m['name']} only fits {m['gpu_percent']}% on the GPU; the rest spills into "
                 "CPU RAM, which is much slower. A smaller model or a smaller context "
