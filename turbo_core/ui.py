@@ -9,6 +9,7 @@ import html
 import queue
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from prompt_toolkit import PromptSession
@@ -50,6 +51,9 @@ COMMANDS = {
     "/paste": "paste a block of code (finish with /end)",
     "/status": "Ollama, models, memory and speed tips",
     "/manage": "ask TURBO Manager to diagnose, optimize or fix the setup",
+    "/build": "build a project on disk: /build NAME what to build  (continue: /build NAME more)",
+    "/new": "start a fresh project: /new NAME what to build",
+    "/auto": "toggle hands-free building (no [Y/n] before commands or overwrites)",
     "/exit": "quit",
 }
 KEYS = {
@@ -188,6 +192,9 @@ class ChatUI:
         self.pending_context: str | None = None
         self.pending_label = ""
         self.prompt: PromptSession | None = None
+        self.builder = None   # active build-mode project
+        self.auto = False     # /auto: build without confirmations
+        self.building = False  # a build is running right now
 
     # -- screen pieces
 
@@ -240,9 +247,13 @@ class ChatUI:
         settings = self.assistant.settings
         attached = f" · <style fg='ansiyellow'>📎 {html.escape(self.pending_label)}</style>" \
             if self.pending_label else ""
+        building = ""
+        if self.builder is not None:
+            auto = " auto" if self.auto else ""
+            building = (f" · <style fg='ansigreen'>build: {html.escape(self.builder_label())}{auto}</style>")
         return HTML(
             f" chat <style fg='ansicyan'>{html.escape(settings.chat_model)}</style>"
-            f" · code <style fg='ansicyan'>{html.escape(settings.code_model)}</style>{attached}"
+            f" · code <style fg='ansicyan'>{html.escape(settings.code_model)}</style>{attached}{building}"
             " · /help · Ctrl+C stop · Ctrl+L clear"
         )
 
@@ -335,6 +346,8 @@ class ChatUI:
                 if self.handle_command(line) == "exit":
                     return 0
                 continue
+            if self.offer_build(line):
+                continue
             self.ask(line)
 
     def warm(self, model: str) -> None:
@@ -379,6 +392,13 @@ class ChatUI:
         """Show the options for a reached limit and return the user's pick."""
         from .fallback import format_seconds
 
+        if self.auto and self.building and decision.kind == "limit":
+            # Hands-free build: keep going on the next free cloud model
+            # (never local Ollama automatically, since it uses RAM).
+            cloud = next((o for o in decision.options if o.kind == "switch" and o.backend == "cloud"), None)
+            if cloud is not None:
+                self.note(f"  ⚠ {decision.message} Auto: continuing with {cloud.model}.", style="yellow")
+                return cloud
         self.console.print(Text(f"⚠ {decision.message}", style="yellow"))
         if decision.advice:
             self.console.print(Text(f"  {decision.advice}", style="yellow"))
@@ -439,6 +459,9 @@ class ChatUI:
             "/paste": self.cmd_paste,
             "/status": self.cmd_status,
             "/manage": self.cmd_manage,
+            "/build": self.cmd_build,
+            "/new": lambda rest: self.cmd_build(rest, fresh=True),
+            "/auto": self.cmd_auto,
             "/exit": lambda _rest: "exit",
             "/quit": lambda _rest: "exit",
         }
@@ -636,6 +659,113 @@ class ChatUI:
         self.pending_context = "\n".join(pasted)
         self.pending_label = f"pasted {len(pasted)} lines"
         self.note(f"📎 Attached {len(pasted)} lines. Now ask about it.", style="green")
+
+    # -- build mode
+
+    def builder_label(self) -> str:
+        if self.builder is None:
+            return ""
+        try:
+            return "./" + self.builder.workspace.relative_to(Path.cwd().resolve()).as_posix()
+        except ValueError:
+            return str(self.builder.workspace)
+
+    def file_event(self, action: str, rel: str, lines: int) -> None:
+        mark, style = ("✔", "green") if action == "Created" else ("✎", "cyan")
+        self.console.print(Text(f"  {mark} {action} {rel} ({lines} lines)", style=style))
+
+    def cmd_auto(self, rest: str) -> None:
+        arg = rest.strip().lower()
+        self.auto = {"on": True, "off": False}.get(arg, not self.auto)
+        if self.builder is not None:
+            self.builder.auto = self.auto
+        if self.auto:
+            self.note("Auto mode ON: builds run commands and overwrite files without asking. "
+                      "Files stay inside the project folder; dangerous commands are still refused. "
+                      "/auto again to turn it off.", style="yellow")
+        else:
+            self.note("Auto mode OFF: TURBO asks [Y/n] before running commands or overwriting files.")
+
+    def cmd_build(self, rest: str, fresh: bool = False) -> None:
+        name, _, request = rest.strip().partition(" ")
+        if not name:
+            if self.builder is None:
+                raise ValueError("Usage: /build NAME what to build   e.g. /build todo-app a Flask to-do list")
+            name = str(self.builder.workspace)
+        elif self.builder is not None and not fresh:
+            target = (Path.cwd() / name).resolve()
+            if target != self.builder.workspace and not target.exists():
+                # "/build add a delete button" probably means: keep going on this project.
+                try:
+                    answer = self.console.input(
+                        f"[yellow]? Continue {self.builder_label()} with \"{rest.strip()}\", or start a new "
+                        f"project in ./{name}? [C/n][/yellow] ").strip().lower()
+                except (KeyboardInterrupt, EOFError):
+                    self.console.print()
+                    return
+                if answer in ("", "c", "continue", "y", "yes"):
+                    name, request = str(self.builder.workspace), rest.strip()
+        self.start_build(name, request.strip(), fresh=fresh)
+
+    def offer_build(self, line: str) -> bool:
+        """For a plain request like 'create a Flask app in ./my-app', offer build mode."""
+        from .builder import looks_like_build_request, suggest_folder
+
+        if not looks_like_build_request(line):
+            return False
+        folder = suggest_folder(line)
+        try:
+            answer = self.console.input(
+                f"[yellow]? Build this as a project on disk? Folder [./{folder}] "
+                "(Enter = yes, n = just chat, or type a folder name):[/yellow] ").strip()
+        except (KeyboardInterrupt, EOFError):
+            self.console.print()
+            return True
+        if answer.lower() in ("n", "no"):
+            return False
+        self.start_build(answer if answer and answer.lower() not in ("y", "yes") else folder, line)
+        return True
+
+    def start_build(self, folder: str, request: str, fresh: bool = False) -> None:
+        from .builder import Builder
+
+        workspace = Path(folder.strip().strip('"')).expanduser()
+        workspace = (workspace if workspace.is_absolute() else Path.cwd() / workspace).resolve()
+        if workspace in (Path.home().resolve(), Path(workspace.anchor)):
+            raise ValueError("Pick a project folder, not your home folder or a whole drive.")
+        same = self.builder is not None and self.builder.workspace == workspace
+        if not same or fresh:
+            if workspace.is_dir() and any(workspace.iterdir()):
+                count = sum(1 for _ in workspace.rglob("*"))
+                self.note(f"{workspace} already exists ({count} items). TURBO will work with what's there "
+                          "and ask before overwriting files.")
+            self.builder = Builder(self.assistant, workspace, ui=self, auto=self.auto)
+        if not request:
+            try:
+                request = self.console.input(f"[cyan]What should I build in {self.builder_label()}?[/cyan] ").strip()
+            except (KeyboardInterrupt, EOFError):
+                self.console.print()
+                return
+            if not request:
+                return
+        self.console.print(Text(f"◆ TURBO build · {self.builder_label()}" + (" · auto" if self.auto else ""),
+                                style=f"bold {ACCENT}"))
+        self.building = True
+        try:
+            answer = self.builder.run(request)
+        except KeyboardInterrupt:
+            self.note("(build stopped - /build again to continue)")
+            return
+        except (LLMError, InputError) as error:
+            self.error(error)
+            return
+        finally:
+            self.building = False
+        self.markdown(answer)
+        created, updated = self.builder.created, self.builder.updated
+        self.note(f"{len(created)} files created, {len(updated)} updated in {self.builder.workspace}. "
+                  f"Continue with: /build {self.builder_label()} <what to change>", style="green")
+        self.console.print()
 
     def cmd_manage(self, rest: str) -> None:
         if self.manager is None:

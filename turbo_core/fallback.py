@@ -89,7 +89,9 @@ def format_seconds(seconds: float) -> str:
 def estimate_tokens(messages: list[dict[str, Any]], expected_output_chars: int = 0,
                     max_tokens: int | None = None) -> int:
     chars = sum(len(str(m.get("content", ""))) for m in messages)
-    output = max(expected_output_chars // CHARS_PER_TOKEN, max_tokens or 0, 300)
+    # The answer usually uses far less than max_tokens allows, so count a
+    # realistic size (expected output, or up to 1024 tokens) instead.
+    output = max(expected_output_chars // CHARS_PER_TOKEN, min(max_tokens or 0, 1024), 300)
     return chars // CHARS_PER_TOKEN + output
 
 

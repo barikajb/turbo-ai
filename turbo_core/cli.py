@@ -588,6 +588,18 @@ def cmd_doctor(assistant: Assistant | None, args, setup_error: str = "") -> int:
     return 0
 
 
+def cmd_build(assistant: Assistant, args) -> int:
+    from turbo_core.ui import ChatUI
+
+    if not sys.stdin.isatty() and not args.auto:
+        raise InputError("turbo build asks before running commands, so it needs an interactive "
+                         "terminal (or pass --auto).")
+    ui = ChatUI(assistant, args.session)
+    ui.auto = args.auto
+    ui.start_build(args.folder, " ".join(args.request))
+    return 0
+
+
 def cmd_manage(assistant: Assistant, args) -> int:
     from turbo_core.manager import Manager
     from turbo_core.ui import ChatUI
@@ -656,6 +668,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("manage", help="ask TURBO Manager to diagnose, optimize or fix the setup")
     p.add_argument("task", nargs="+", help="e.g. \"it's too slow\"")
     p.set_defaults(func=cmd_manage)
+
+    p = sub.add_parser("build", help="describe an app or script; TURBO writes it into FOLDER")
+    p.add_argument("folder", help="project folder, e.g. my-app (created if needed)")
+    p.add_argument("request", nargs="+", help="what to build, in plain English")
+    p.add_argument("--auto", action="store_true",
+                   help="don't ask before running commands or overwriting files")
+    p.set_defaults(func=cmd_build)
 
     p = sub.add_parser("serve", help="run the local HTTP server for the VS Code extension")
     p.set_defaults(func=cmd_serve)

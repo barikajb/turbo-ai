@@ -141,6 +141,8 @@ first word, so you can always tell it's working.
 | `/paste` | paste a block of code, end with `/end` |
 | `/status` | Ollama, memory, CPU/GPU, and speed tips |
 | `/manage TASK` | ask TURBO Manager (see below) |
+| `/build NAME ...` · `/new NAME ...` | build a project on disk (see *Build mode*) |
+| `/auto` | build without `[Y/n]` questions |
 | `/exit` | quit |
 
 | Key | |
@@ -152,6 +154,46 @@ first word, so you can always tell it's working.
 | Tab | complete a `/command` |
 
 `turbo --plain` gives simple text output (also used automatically when output is piped).
+
+## Build mode: describe it, TURBO writes it
+
+Describe an app or script in plain English and TURBO creates the whole project on disk,
+checks it runs, and fixes what fails:
+
+```
+/build todo-app a Flask to-do list with SQLite and a simple HTML page
+/build todo-app add a "delete" button          # keep working on the same project
+/new scraper a script that saves a web page's headlines to CSV
+```
+
+Or just ask in the chat ("create a new Flask app in ./my-app") and TURBO offers to build
+it. From any terminal: `turbo build my-app "what to build"`.
+
+```
+◆ TURBO build · ./temp-converter
+  ✔ Created convert.py (67 lines)
+  ✔ Created convert_cli.py (48 lines)
+  ✔ Created test_convert.py (62 lines)
+? Run: python -m unittest test_convert.py [Y/n]
+  ✔ Ran python -m unittest test_convert.py (exit 0)
+```
+
+- **Everything stays in the project folder** (`./todo-app` above). Paths outside it are refused.
+- **It asks `[Y/n]`** before running a command or overwriting a file that already existed.
+  `/auto` turns that off for hands-free multi-file builds (`/auto` again to turn it back on).
+  In `/auto`, if a free limit is reached, TURBO continues on the next free cloud model by
+  itself and says so. It never switches to local Ollama on its own.
+- **Commands** run inside the project folder and are stopped after 90 seconds, so builds
+  check code with tests or quick runs, not servers. Clearly destructive commands (formatting
+  drives, deleting outside the project, piping downloads into a shell) are always refused,
+  even in `/auto`.
+- **Stays within free limits:** once a file is saved, its full text isn't re-sent with every
+  step (the model reads it again when needed).
+- **Honest summaries:** if the final summary mentions a file that doesn't exist, TURBO
+  points that out.
+- Uses your code model (Groq `qwen3.8-27b` in cloud mode, `qwen2.5-coder:3b` locally). The
+  model writes the code, so **read it before you rely on it**, especially anything that
+  deletes files, handles passwords or talks to the internet.
 
 ## TURBO Manager
 
@@ -304,6 +346,8 @@ turbo_core/cli.py        the `turbo` command (turbo.py / turbo.cmd run it from a
 pyproject.toml           packaging (pip/pipx install)
 turbo_core/ui.py         interactive chat (rich + prompt_toolkit)
 turbo_core/manager.py    TURBO Manager agent, tools and playbooks
+turbo_core/builder.py    build mode (write_file, read_file, list_directory, run_shell_command)
+turbo_core/fallback.py   free-limit fallback chain
 turbo_core/system.py     status snapshot and speed tips
 turbo_core/cloud.py      free cloud providers (Groq, Gemini, OpenRouter)
 turbo_core/setup.py      `turbo setup` wizard
