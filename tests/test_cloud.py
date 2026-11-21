@@ -110,7 +110,7 @@ class ClientTests(unittest.TestCase):
         c, session = client()
         session.get.return_value = response(body={"data": [
             {"id": "whisper-large-v3"}, {"id": "openai/gpt-oss-20b"}, {"id": "llama-guard-4"},
-            {"id": "qwen/qwen3-32b"}, {"id": "playai-tts"}]})
+            {"id": "qwen/qwen3-32b"}, {"id": "playai-tts"}, {"id": "canopylabs/orpheus-v1-english"}]})
         self.assertEqual(c.list_models(), ["openai/gpt-oss-20b", "qwen/qwen3-32b"])
 
     def test_no_local_operations(self):

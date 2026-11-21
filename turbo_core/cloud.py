@@ -57,7 +57,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 
 # Model ids that aren't chat models.
 NOT_CHAT = re.compile(r"whisper|tts|speech|audio|guard|embed|moderation|image|vision-only|"
-                      r"playai|transcri|rerank|compound|aqa|imagen|veo|learnlm", re.IGNORECASE)
+                      r"playai|orpheus|transcri|rerank|compound|aqa|imagen|veo|learnlm", re.IGNORECASE)
 
 # Preference order when picking models automatically (first match wins).
 CODE_PREFERENCE = [r"qwen.*coder", r"devstral|codestral", r"qwen3", r"gpt-oss-120b", r"kimi",

@@ -77,6 +77,11 @@ class ClassifyTests(unittest.TestCase):
             "switch code to qwen2.5-coder:1.5b": "agent",
             "why does turbo.py crash": "agent",
             "tell me a joke": "agent",
+            "which model is best for coding? check what is available first": "agent",
+            "why is it so slow?": "agent",
+            "what's wrong with my setup": "diagnose",
+            "is everything ok?": "diagnose",
+            "make it faster": "speed",
         }
         for text, expected in cases.items():
             self.assertEqual(mgr.classify(text), expected, text)

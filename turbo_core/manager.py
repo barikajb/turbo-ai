@@ -572,8 +572,10 @@ Rules:
 
 SPEED_WORDS = re.compile(r"\b(slow(er|ly)?|fast(er)?|speed( ?up)?|sluggish|laggy|lag|quick(er)?|"
                          r"performance|optimi[sz]e)\b", re.IGNORECASE)
-DIAGNOSE_WORDS = re.compile(r"\b(check|diagnos\w*|health|doctor|status|setup|what'?s wrong|"
-                            r"is (everything|it) (ok|working))\b", re.IGNORECASE)
+DIAGNOSE_WORDS = re.compile(r"\b(check (my |the |turbo'?s? )?(setup|system|install\w*|everything|turbo)|"
+                            r"diagnos\w*|health ?check|doctor|status|what'?s wrong|"
+                            r"is (everything|it|turbo) (ok|okay|working|fine))\b", re.IGNORECASE)
+QUESTION = re.compile(r"^\s*(which|what|why|how|when|where|who|can|should|does|do|is)\b", re.IGNORECASE)
 
 
 def classify(task: str) -> str:
@@ -585,6 +587,10 @@ def classify(task: str) -> str:
                 r"|\.\w{1,4}\b")       # a file name like turbo.py
     if re.search(specific, task, re.IGNORECASE):
         return "agent"
+    if DIAGNOSE_WORDS.search(task) and re.search(r"what'?s wrong|^\s*is ", task, re.IGNORECASE):
+        return "diagnose"
+    if QUESTION.search(task):
+        return "agent"  # real questions deserve a real answer, not a canned report
     if SPEED_WORDS.search(task):
         return "speed"
     if DIAGNOSE_WORDS.search(task):
