@@ -5,8 +5,12 @@ models running on your own machine through [Ollama](https://ollama.com).
 No API keys and no paid services. Your code never leaves your computer.
 
 Use it from:
-- **the terminal**: `turbo ask`, `turbo chat`, `turbo explain`, `turbo fix`
+- **the terminal**: type `turbo` for an interactive chat (live Markdown, syntax-highlighted
+  code, slash commands), or use `turbo ask`, `turbo explain`, `turbo fix` directly
 - **VS Code**: *Ask AI*, *Explain Selection*, *Fix Selection* (with a diff you accept or reject)
+- **TURBO Manager** (`/manage` in the chat): a built-in agent that checks your setup,
+  speeds TURBO up, switches or downloads models and troubleshoots problems, and asks before
+  changing anything
 
 ```
 VS Code extension ──HTTP (127.0.0.1)──▶ turbo serve ─┐
@@ -19,14 +23,15 @@ terminal: turbo ask/fix ──────────────────�
 You need **Python 3.10+** and **[Ollama](https://ollama.com)** (free). It works on
 Windows, macOS and Linux.
 
-1. **Install Ollama** from https://ollama.com and start it. Then download the models
-   (about 6.7 GB in total, one time only):
+1. **Install Ollama** from https://ollama.com and start it. Then download the two default
+   models (about 4 GB in total, one time only):
    ```
-   ollama pull qwen2.5-coder:7b
+   ollama pull qwen2.5-coder:3b
    ollama pull llama3.2:3b
    ```
-   `qwen2.5-coder:7b` handles explain/fix. `llama3.2:3b` is the faster model for plain
-   questions. On a slower computer, use `qwen2.5-coder:3b` instead (see *Settings*).
+   `qwen2.5-coder:3b` handles explain/fix and `llama3.2:3b` answers plain questions. Both are
+   small and fast enough for a laptop without a GPU. With a good GPU, `qwen2.5-coder:7b`
+   finds bugs better: switch with `/model code qwen2.5-coder:7b --save`.
 
 2. **Install TURBO** with [pipx](https://pipx.pypa.io), which puts the `turbo` command
    on your PATH in its own isolated environment:
@@ -49,10 +54,12 @@ To update later: `pipx upgrade turbo-ai`. To remove: `pipx uninstall turbo-ai`.
 
 ### Settings
 
-Everything has a default. To change something, create `~/.turbo/.env` (on Windows,
+Everything has a default. The easy way to change models is `/model ... --save` in the
+chat, or ask `/manage`. To change other settings, create `~/.turbo/.env` (on Windows,
 `C:\Users\<you>\.turbo\.env`) using [`.env.example`](.env.example) as a template, for example:
 ```
-TURBO_CODE_MODEL=qwen2.5-coder:3b
+TURBO_CODE_MODEL=qwen2.5-coder:7b
+TURBO_MAX_TOKENS=2000
 ```
 Real environment variables override the file. `~/.turbo` also holds your conversation
 history (`turbo.db`). Set `TURBO_HOME` to use a different folder.
@@ -68,7 +75,71 @@ python -m venv .venv
 `pip install -e .` installs the `turbo` command from your clone, so edits take effect
 immediately. On Windows you can instead add the clone to your PATH and use `turbo.cmd`.
 
-## Terminal
+## Terminal chat
+
+Type `turbo`. You get a status line (Ollama, models, free RAM), then a prompt. Answers
+stream in live as formatted Markdown with highlighted code. A spinner shows until the
+first word, so you can always tell it's working.
+
+| Command | What it does |
+|---|---|
+| `/help` | commands and keys |
+| `/clear` | forget the conversation and clear the screen |
+| `/model` | show models · `/model NAME` switch both · `/model code NAME` or `/model chat NAME` switch one · add `--save` to keep it. Offers to download a model you don't have. |
+| `/models` | installed models, sizes, and whether each runs on CPU or GPU |
+| `/file PATH [LINES]` | share a file (or lines `10-40`) with your next question |
+| `/paste` | paste a block of code, end with `/end` |
+| `/status` | Ollama, memory, CPU/GPU, and speed tips |
+| `/manage TASK` | ask TURBO Manager (see below) |
+| `/exit` | quit |
+
+| Key | |
+|---|---|
+| Enter / Alt+Enter | send / new line |
+| Ctrl+C | stop the answer · clear the line · twice to quit |
+| Ctrl+L | clear the screen |
+| Up / Down | previous messages (saved in `~/.turbo/history`) |
+| Tab | complete a `/command` |
+
+`turbo --plain` gives simple text output (also used automatically when output is piped).
+
+## TURBO Manager
+
+`/manage` in the chat, or `turbo manage "..."` in any terminal:
+
+```
+/manage it's too slow
+/manage check my setup
+/manage download a faster coding model
+/manage fix a dependency issue
+/manage why does turbo crash when I start it?
+```
+
+- It **looks** freely: Ollama status, installed and loaded models (and how much of each is
+  on the GPU or spilling to CPU), RAM, CPU, versions, and TURBO's own files.
+- It **asks first** for every change: switching, downloading or unloading a model, changing
+  a setting, editing a file (you see the diff), or running a command (you see the exact
+  command). Nothing happens unless you answer `y`.
+- "Too slow" and "check my setup" use built-in playbooks: they take a few seconds and give
+  the same correct result every time. Other requests go to the model with tools, which
+  takes about a minute on a CPU and, being a small model, can make mistakes. Read what it
+  proposes before you say yes.
+- File access is limited to TURBO's own folders. `credentials.json`, `token.json` and
+  `.git` are off limits.
+
+## Speed
+
+On a computer without a GPU Ollama can use, the model runs on the CPU, so the main levers are:
+1. **Small models.** The defaults are 3B. On one CPU-only laptop, a bug fix took 14s with
+   `qwen2.5-coder:3b` against 43s with `7b`. `/manage it's too slow` switches for you.
+2. **Free RAM.** With less than ~2.5 GB free, loading a model can swap to disk and stall.
+   `/status` warns you.
+3. **TURBO's defaults already help:** the model stays loaded for 30 minutes
+   (`TURBO_KEEP_ALIVE`), the context window starts small (4096) and grows only for big
+   files, answers are capped at 1200 tokens (`TURBO_MAX_TOKENS`), and the chat model is
+   loaded in the background as soon as `turbo` starts.
+
+## One-off commands
 
 ```
 turbo ask "What's the difference between a list and a tuple?"
@@ -79,9 +150,9 @@ turbo fix app.py -l 10-30                       # explanation + colored diff, fi
 turbo fix app.py -l 10-30 -m "crashes on empty list"
 turbo fix app.py -l 10-30 --apply               # asks y/N, then writes
 type app.py | turbo fix -                       # from stdin
-turbo chat                                      # interactive; /file app.py 10-30, /paste, /reset, /exit
 turbo reset                                     # forget the conversation
 turbo doctor                                    # check Ollama, models, port
+turbo manage "it's too slow"                    # TURBO Manager without opening the chat
 ```
 
 Follow-ups remember the conversation: run `turbo fix ...`, then
@@ -90,8 +161,7 @@ Follow-ups remember the conversation: run `turbo fix ...`, then
 
 Answers stream in word by word as the model writes them. For `fix`, the
 explanation streams and the diff is shown when the model finishes. Use
-`turbo --no-stream ...` to print answers all at once. In `chat`, Ctrl+C stops
-the current answer without leaving the chat.
+`turbo --no-stream ...` to print answers all at once.
 
 Exit codes: `0` ok, `1` model/Ollama error, `2` bad input.
 
@@ -170,8 +240,9 @@ programs. Web pages are refused. Set `TURBO_TOKEN` to also require an
 - **"Can't reach Ollama"**: start the Ollama app, or run `ollama serve`.
 - **"Model ... is not installed"**: run the `ollama pull ...` command shown.
 - **VS Code says the server isn't running**: run `turbo serve`, or click *Start Server*.
-- **Slow answers**: on a laptop without a GPU, a 7B model takes 30 seconds to a few
-  minutes. Select less code, or set `TURBO_CODE_MODEL=qwen2.5-coder:3b`.
+- **Slow answers or a long "Thinking..."**: run `/status` or `/manage it's too slow`.
+  The usual causes are a big model on CPU or too little free RAM (see *Speed*).
+- **Anything else**: `turbo doctor`, or `/manage check my setup`.
 - **Port in use**: set `TURBO_PORT` and the matching `turbo.serverUrl`.
 
 ## Project layout
@@ -179,6 +250,9 @@ programs. Web pages are refused. Set `TURBO_TOKEN` to also require an
 ```
 turbo_core/cli.py        the `turbo` command (turbo.py / turbo.cmd run it from a clone)
 pyproject.toml           packaging (pip/pipx install)
+turbo_core/ui.py         interactive chat (rich + prompt_toolkit)
+turbo_core/manager.py    TURBO Manager agent, tools and playbooks
+turbo_core/system.py     status snapshot and speed tips
 turbo_core/              config, Ollama client, prompts, diffing, history, assistant, server
 vscode-extension/        VS Code extension (plain JavaScript)
 scripts/build_vsix.py    packages the extension
