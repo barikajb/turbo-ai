@@ -203,17 +203,18 @@ class ChatUI:
 
     def print_status_line(self, snap: system.Snapshot) -> None:
         line = Text("  ")
+        where = f"{snap.backend_label} (cloud, free tier)" if snap.is_cloud else "Ollama"
         if snap.ollama_ok:
             line.append("● ", style="green")
-            line.append("Ollama running", style="green")
+            line.append(f"{where} connected" if snap.is_cloud else "Ollama running", style="green")
         else:
             line.append("● ", style="red")
-            line.append("Ollama not reachable", style="red")
+            line.append(f"{where} not reachable", style="red")
         line.append("   chat ", style=DIM)
         line.append(snap.chat_model, style="cyan")
         line.append("   code ", style=DIM)
         line.append(snap.code_model, style="cyan")
-        if snap.ram_free_gb is not None:
+        if snap.ram_free_gb is not None and not snap.is_cloud:
             line.append(f"   RAM {snap.ram_free_gb} / {snap.ram_total_gb} GB free", style=DIM)
         self.console.print(line)
 
@@ -221,8 +222,9 @@ class ChatUI:
         if snap.ollama_ok:
             for role, name in (("chat", snap.chat_model), ("code", snap.code_model)):
                 if not snap.is_installed(name):
-                    warnings.append(f"{role} model {name} isn't installed: /model to switch, "
-                                    f"or run `ollama pull {name}`")
+                    fix = ("run `turbo setup` to pick models" if snap.is_cloud
+                           else f"or run `ollama pull {name}`")
+                    warnings.append(f"{role} model {name} isn't available: /model to switch, {fix}")
         tips = system.speed_tips(snap)
         if not snap.ollama_ok:
             warnings.extend(tips)
@@ -439,6 +441,8 @@ class ChatUI:
         installed = self.assistant.llm.list_models()
         if name in installed or (":" not in name and f"{name}:latest" in installed):
             return True
+        if self.assistant.settings.is_cloud:
+            raise ValueError(f"{name} isn't one of the free models on this provider. See /models.")
         if not self.confirm(f"{name} isn't installed. Download it now?"):
             self.note("Not switched.")
             return False
@@ -464,7 +468,17 @@ class ChatUI:
     def cmd_models(self, _rest: str) -> None:
         snap = system.snapshot(self.assistant)
         if not snap.ollama_ok:
-            raise LLMError("Ollama isn't running. Start the Ollama app (or run `ollama serve`).")
+            raise LLMError(snap.backend_error or "Ollama isn't running. Start the Ollama app (or run `ollama serve`).")
+        if snap.is_cloud:
+            table = Table(box=None, padding=(0, 2), header_style=DIM)
+            table.add_column(f"free models on {snap.backend_label}")
+            table.add_column("in use as")
+            for m in snap.installed:
+                roles = [r for r, n in (("chat", snap.chat_model), ("code", snap.code_model)) if n == m["name"]]
+                table.add_row(m["name"], ", ".join(roles), style="cyan" if roles else None)
+            self.console.print(table)
+            self.note("Switch with /model NAME. Free limits are counted per model.")
+            return
         loaded = {m["name"]: m for m in snap.loaded}
         table = Table(box=None, padding=(0, 2), header_style=DIM)
         for column in ("model", "size", "params", "in use as", "loaded"):

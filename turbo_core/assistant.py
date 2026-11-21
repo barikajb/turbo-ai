@@ -61,14 +61,7 @@ class Assistant:
     @classmethod
     def from_settings(cls, settings: Settings | None = None) -> "Assistant":
         settings = settings or Settings.from_env()
-        llm = OllamaClient(
-            base_url=settings.ollama_url,
-            timeout=settings.timeout_seconds,
-            context_tokens=settings.context_tokens,
-            max_context_tokens=settings.max_context_tokens,
-            keep_alive=settings.keep_alive,
-        )
-        return cls(llm, ConversationStore(settings.db_path), settings)
+        return cls(make_client(settings), ConversationStore(settings.db_path), settings)
 
     def set_models(self, chat: str | None = None, code: str | None = None) -> None:
         """Switch models for this session (see config.save_setting to persist)."""
@@ -208,6 +201,27 @@ class Assistant:
         # Saved only after a successful reply, so failures don't pollute history.
         self.store.add_exchange(session_id, message, reply)
         return reply
+
+
+def make_client(settings: Settings):
+    """Local Ollama, or a cloud provider's API (see turbo setup)."""
+    if settings.is_cloud:
+        from .cloud import OpenAICompatClient
+
+        return OpenAICompatClient(
+            provider=settings.provider,
+            api_key=settings.api_key,
+            base_url=settings.api_base or None,
+            timeout=min(settings.timeout_seconds, 180),
+            max_context_tokens=max(settings.max_context_tokens, 32768),
+        )
+    return OllamaClient(
+        base_url=settings.ollama_url,
+        timeout=settings.timeout_seconds,
+        context_tokens=settings.context_tokens,
+        max_context_tokens=settings.max_context_tokens,
+        keep_alive=settings.keep_alive,
+    )
 
 
 def _require(value: str | None, name: str) -> str:

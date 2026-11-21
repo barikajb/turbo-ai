@@ -437,10 +437,10 @@ def check_port(host: str, port: int) -> tuple[str, str]:
     return "busy", ""
 
 
-def cmd_doctor(assistant: Assistant, args) -> int:
+def cmd_doctor(assistant: Assistant | None, args, setup_error: str = "") -> int:
     from turbo_core import __version__
 
-    settings = assistant.settings
+    settings = assistant.settings if assistant else Settings.from_env()
     color = sys.stdout.isatty()
     ok_mark = f"{GREEN}✓{RESET}" if color else "OK  "
     bad_mark = f"{RED}✗{RESET}" if color else "FAIL"
@@ -460,22 +460,40 @@ def cmd_doctor(assistant: Assistant, args) -> int:
     report(None, f"Python {sys.version.split()[0]}  ({sys.executable})")
     report(None, f"Data folder: {settings.db_path.parent}")
 
-    try:
-        installed = assistant.llm.list_models()
-    except LLMError:
-        report(False, f"Ollama is not reachable at {settings.ollama_url}",
-               "Install it from https://ollama.com, then start the Ollama app (or run: ollama serve)")
-        installed = None
+    if settings.is_cloud:
+        from turbo_core.cloud import provider_label
+
+        label = provider_label(settings.provider)
+        report(None, f"Models run in the cloud on {label} (free tier); no local models needed")
+        backend_name, fix_missing = label, "Run `turbo setup` to pick models again"
     else:
-        report(True, f"Ollama is running at {settings.ollama_url} ({len(installed)} models installed)")
+        backend_name, fix_missing = "Ollama", None
+
+    installed = None
+    if assistant is None:
+        report(False, f"{backend_name} isn't set up: {setup_error}", "Run: turbo setup")
+    else:
+        try:
+            installed = assistant.llm.list_models()
+        except LLMError as error:
+            if settings.is_cloud:
+                report(False, f"Can't use {backend_name}: {error}", "Check your internet, or run: turbo setup")
+            else:
+                report(False, f"Ollama is not reachable at {settings.ollama_url}",
+                       "Install it from https://ollama.com, then start the Ollama app (or run: ollama serve)"
+                       " - or use a free cloud model instead: turbo setup")
+        else:
+            where = f"{backend_name} API" if settings.is_cloud else f"Ollama at {settings.ollama_url}"
+            kind = "free models offered" if settings.is_cloud else "models installed"
+            report(True, f"{where} is reachable ({len(installed)} {kind})")
 
     for role, name in (("chat", settings.chat_model), ("code", settings.code_model)):
         if installed is None:
-            report(None, f"{role} model {name}: can't check until Ollama is running")
+            report(None, f"{role} model {name}: can't check until {backend_name} is reachable")
         elif model_installed(name, installed):
-            report(True, f"{role} model {name} is installed")
+            report(True, f"{role} model {name} is available")
         else:
-            report(False, f"{role} model {name} is not installed", f"ollama pull {name}")
+            report(False, f"{role} model {name} is not available", fix_missing or f"ollama pull {name}")
 
     state, detail = check_port(settings.host, settings.port)
     if state == "free":
@@ -551,8 +569,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reset", help="forget the conversation for --session")
     p.set_defaults(func=cmd_reset)
 
-    p = sub.add_parser("doctor", help="check that Ollama, the models and the server port are ready")
+    p = sub.add_parser("doctor", help="check that the model backend, models and server port are ready")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("setup", help="choose where models run: a free cloud API (Groq, ...) or local Ollama")
+    p.add_argument("--provider", choices=["groq", "gemini", "openrouter", "ollama"],
+                   help="skip the menu and use this provider")
+    p.set_defaults(func=None)
 
     p = sub.add_parser("manage", help="ask TURBO Manager to diagnose, optimize or fix the setup")
     p.add_argument("task", nargs="+", help="e.g. \"it's too slow\"")
@@ -572,7 +595,17 @@ def main(argv: list[str] | None = None, assistant: Assistant | None = None) -> i
     try:
         if args.command == "serve":
             return cmd_serve(None, args)
-        assistant = assistant or Assistant.from_settings()
+        if args.command == "setup":
+            from turbo_core.setup import run_setup
+
+            return run_setup(args)
+        if assistant is None:
+            try:
+                assistant = Assistant.from_settings()
+            except LLMError as error:  # e.g. cloud provider chosen but no API key yet
+                if args.command == "doctor":
+                    return cmd_doctor(None, args, setup_error=str(error))
+                raise
         return args.func(assistant, args)
     except InputError as error:
         print(f"Error: {error}", file=sys.stderr)

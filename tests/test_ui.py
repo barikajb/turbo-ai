@@ -156,7 +156,26 @@ class ChatCommandTests(unittest.TestCase):
         chat, _, llm, c = self.make_ui()
         llm.model_details = lambda: installed("chat-model")
         chat.print_banner()
-        self.assertIn("code model code-model isn't installed", output(c))
+        self.assertIn("code model code-model isn't available", output(c))
+        self.assertIn("ollama pull code-model", output(c))
+
+    def test_cloud_banner_shows_provider_not_ram(self):
+        from dataclasses import replace
+
+        chat, assistant, _, c = self.make_ui()
+        assistant.settings = replace(assistant.settings, provider="groq")
+        chat.print_banner()
+        self.assertIn("Groq (cloud, free tier) connected", output(c))
+        self.assertNotIn("RAM", output(c))
+
+    def test_cloud_model_switch_never_offers_download(self):
+        from dataclasses import replace
+
+        chat, assistant, _, c = self.make_ui()
+        assistant.settings = replace(assistant.settings, provider="groq")
+        chat.confirm = lambda *a, **k: self.fail("should not ask to download")
+        chat.handle_command("/model not-offered")
+        self.assertIn("isn't one of the free models", output(c))
 
     def test_slash_completer(self):
         from prompt_toolkit.document import Document

@@ -29,7 +29,9 @@ from .llm import LLMError
 MAX_STEPS = 8
 MAX_TOOL_OUTPUT = 4000
 MAX_FILE_LINES = 200
-BLOCKED_NAMES = {"credentials.json", "token.json"}
+# Never readable or editable by the manager. .env holds the API key, which
+# must not be sent to a model (in cloud mode the model runs on someone else's server).
+BLOCKED_NAMES = {"credentials.json", "token.json", ".env"}
 
 # Settings the manager may change, and whether they apply without a restart.
 SETTINGS = {
@@ -156,7 +158,9 @@ class Manager:
         settings = self.assistant.settings
         done: list[str] = []
 
-        if not status.get("ollama_running"):
+        if settings.is_cloud:
+            return self.cloud_speed_report(status)
+        if not status.get("reachable"):
             return self.finish("Ollama isn't running, so nothing can be sped up yet. Start the Ollama "
                                "app (or run `ollama serve`), then try again.")
 
@@ -219,15 +223,21 @@ class Manager:
         else:
             ok.append("Python dependencies are installed")
 
-        if not diag.get("ollama_running"):
-            problems.append("Ollama isn't running: start the Ollama app (or run `ollama serve`)")
+        settings = self.assistant.settings
+        backend = diag.get("backend", "Ollama")
+        if not diag.get("reachable"):
+            problems.append(status.get("backend_error") or
+                            ("Ollama isn't running: start the Ollama app (or run `ollama serve`)"
+                             if not settings.is_cloud else f"Can't reach {backend}: check your internet"))
         else:
-            ok.append("Ollama is running")
-            settings = self.assistant.settings
+            ok.append(f"{backend} is reachable")
             for role, key in (("chat", "chat_model_installed"), ("code", "code_model_installed")):
                 name = getattr(settings, f"{role}_model")
                 if diag.get(key):
-                    ok.append(f"{role} model {name} is installed")
+                    ok.append(f"{role} model {name} is available")
+                elif settings.is_cloud:
+                    problems.append(f"{role} model {name} isn't offered by {backend} (free tier). "
+                                    "Run `turbo setup` to pick models again, or /models.")
                 elif self.call_tool("pull_model", {"name": name}).get("ok"):
                     ok.append(f"{role} model {name} downloaded")
                 else:
@@ -239,6 +249,27 @@ class Manager:
             lines.append("**Needs attention:**\n" + "\n".join(f"- {p}" for p in problems))
         else:
             lines.append("No problems found.")
+        return self.finish("\n\n".join(lines))
+
+    def cloud_speed_report(self, status: dict) -> str:
+        from .cloud import pick_models
+
+        settings = self.assistant.settings
+        backend = status.get("backend", "the cloud provider")
+        if not status.get("reachable"):
+            return self.finish(status.get("backend_error") or f"Can't reach {backend}. Check your internet.")
+        lines = [f"TURBO runs on {backend}, so your computer's RAM and CPU aren't the bottleneck. "
+                 "Speed depends on the model and on your internet connection."]
+        available = [m["name"] for m in status.get("installed_models", [])]
+        fast_chat, _ = pick_models(settings.provider, available)
+        previous = settings.chat_model
+        if fast_chat and fast_chat != previous:
+            result = self.call_tool("switch_model", {"role": "chat", "name": fast_chat,
+                                                     "save": self.wants_save()})
+            if result.get("ok"):
+                lines.append(f"**Done:** chat model {previous} → {fast_chat} (a quick free one).")
+        lines.append("If answers stop with a 'free limit' message, wait for the reset or switch "
+                     "models with /model: limits are counted per model.")
         return self.finish("\n\n".join(lines))
 
     def finish(self, answer: str) -> str:
@@ -313,17 +344,24 @@ class Manager:
                     f"{snap.ram_free_gb} GB free of {snap.ram_total_gb} GB RAM")
         gpu = ("no model loaded yet" if not snap.loaded else
                ", ".join(f"{m['name']} {m['gpu_percent']}% on GPU" for m in snap.loaded))
-        fast = "; ".join(f"{role}: " + ", ".join(f"{n} ({s})" for n, s in models)
-                         for role, models in system.FAST_MODELS.items())
-        return f"""You are TURBO Manager, the system agent of TURBO (a local coding assistant).
-You diagnose and manage TURBO and Ollama on this computer.
+        if settings.is_cloud:
+            backend = (f"- Models run in the cloud on {snap.backend_label} (free tier). Local RAM/CPU "
+                       "don't affect speed. pull_model/unload_model don't apply; switch_model picks "
+                       "from the provider's free models. The API key is private: never ask for it.")
+        else:
+            fast = "; ".join(f"{role}: " + ", ".join(f"{n} ({s})" for n, s in models)
+                             for role, models in system.FAST_MODELS.items())
+            backend = (f"- Models run locally in Ollama; in memory: {gpu}\n- Fast small models: {fast}. "
+                       "1.5-3B models are already the fast tier; never suggest bigger ones for speed.")
+        return f"""You are TURBO Manager, the system agent of TURBO (a coding assistant).
+You diagnose and manage TURBO and its model setup on this computer.
 
 Facts (from TURBO):
 - TURBO {__version__} at {package_root()}; data {turbo_home()}
 - Python {platform.python_version()}: {sys.executable}
-- {hardware}; in memory: {gpu}
+- {hardware}
 - Active: chat {settings.chat_model}, code {settings.code_model}
-- Fast small models: {fast}. 1.5-3B models are already the fast tier; never suggest bigger ones for speed.
+{backend}
 
 Rules:
 - Check real state with a tool before acting or advising. Never guess.
@@ -359,15 +397,18 @@ Rules:
             "turbo_version": __version__,
             "python": f"{platform.python_version()} ({sys.executable})",
             "dependencies": deps,
-            "ollama_running": snap.ollama_ok,
+            "backend": snap.backend_label + (" (cloud)" if snap.is_cloud else " (this computer)"),
+            "reachable": snap.ollama_ok,
+            "api_key_set": bool(settings.api_key) if settings.is_cloud else None,  # never the key itself
             "chat_model_installed": snap.is_installed(settings.chat_model) if snap.ollama_ok else None,
             "code_model_installed": snap.is_installed(settings.code_model) if snap.ollama_ok else None,
             "package_folder": str(package_root()),
             "data_folder": str(turbo_home()),
             "settings_file": str(turbo_home() / ".env"),
             "settings": {k: getattr(settings, k) for k in (
-                "ollama_url", "chat_model", "code_model", "context_tokens", "max_context_tokens",
-                "max_tokens", "keep_alive", "history_chars", "timeout_seconds", "port")},
+                "provider", "ollama_url", "chat_model", "code_model", "context_tokens",
+                "max_context_tokens", "max_tokens", "keep_alive", "history_chars", "timeout_seconds",
+                "port")},
         }
 
     @tool("list_files", "List a folder in TURBO's files.", changes=False,

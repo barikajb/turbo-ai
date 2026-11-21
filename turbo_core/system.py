@@ -37,6 +37,18 @@ class Snapshot:
     cpu_percent: float | None = None
     cpu_cores: int | None = None
     os_name: str = ""
+    provider: str = "ollama"
+    backend_error: str = ""
+
+    @property
+    def is_cloud(self) -> bool:
+        return self.provider != "ollama"
+
+    @property
+    def backend_label(self) -> str:
+        from .cloud import provider_label
+
+        return "Ollama" if not self.is_cloud else provider_label(self.provider)
 
     @property
     def installed_names(self) -> list[str]:
@@ -48,7 +60,9 @@ class Snapshot:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "ollama_running": self.ollama_ok,
+            "backend": self.backend_label + (" (cloud)" if self.is_cloud else " (this computer)"),
+            "reachable": self.ollama_ok,
+            "backend_error": self.backend_error,
             "os": self.os_name,
             "cpu_cores": self.cpu_cores,
             "cpu_percent": self.cpu_percent,
@@ -79,13 +93,16 @@ def snapshot(assistant, cpu_sample_seconds: float = 0.0) -> Snapshot:
         code_model=settings.code_model,
         context_tokens=getattr(llm, "context_tokens", settings.context_tokens),
         os_name=f"{platform.system()} {platform.release()}",
+        provider=getattr(settings, "provider", "ollama"),
         cpu_cores=os.cpu_count(),
     )
     try:
         snap.installed = llm.model_details()
         snap.ollama_ok = True
         snap.loaded = llm.loaded_models()
-    except (LLMError, AttributeError):
+    except LLMError as error:
+        snap.backend_error = str(error)
+    except AttributeError:
         pass
     if psutil is not None:
         memory = psutil.virtual_memory()
@@ -110,6 +127,10 @@ def model_billions(name: str, installed: list[dict[str, Any]] | None = None) -> 
 def speed_tips(snap: Snapshot) -> list[str]:
     """Plain-language suggestions to make TURBO faster on this machine."""
     tips: list[str] = []
+    if snap.is_cloud:
+        if not snap.ollama_ok:
+            return [snap.backend_error or f"Can't reach {snap.backend_label}. Check your internet connection."]
+        return []  # models run on the provider's servers; local RAM/CPU don't matter
     if not snap.ollama_ok:
         return ["Ollama isn't running. Start the Ollama app (or run `ollama serve`)."]
 

@@ -20,10 +20,34 @@ terminal: turbo ask/fix ──────────────────�
 
 ## Install
 
-You need **Python 3.10+** and **[Ollama](https://ollama.com)** (free). It works on
-Windows, macOS and Linux.
+You need **Python 3.10+**. Then choose where the AI models run:
 
-1. **Install Ollama** from https://ollama.com and start it. Then download the two default
+- **Free cloud API**: no downloads and almost no RAM; works on any laptop.
+  Run `turbo setup` after installing (step 2) and pick **Groq** (recommended), Google
+  Gemini or OpenRouter. You can skip step 1 entirely.
+- **Local Ollama**: fully private and offline, but the models need 2-5 GB of RAM.
+  Follow step 1.
+
+It works on Windows, macOS and Linux.
+
+### Free cloud mode (no costs)
+
+`turbo setup` walks you through it:
+1. Sign up for a free API key (the wizard shows the link, e.g. https://console.groq.com/keys).
+   **Don't add a credit card or payment method.** Without one there is nothing to charge.
+2. Paste the key. It's checked, saved only on your computer in `~/.turbo/.env`, and never
+   shown or sent anywhere except to that provider.
+3. TURBO picks free models automatically and runs a test request.
+
+TURBO only ever uses free models (on OpenRouter, only models marked `:free`). When a
+provider's free daily limit runs out, TURBO tells you when it resets; nothing gets billed.
+Switch back to local any time with `turbo setup` → *Local Ollama*.
+
+**Privacy note:** in cloud mode, your questions and the code you share go to that provider.
+Google may use free-tier Gemini prompts to improve its products. Use local Ollama for code
+you can't share.
+
+1. *(Local mode only)* **Install Ollama** from https://ollama.com and start it. Then download the two default
    models (about 4 GB in total, one time only):
    ```
    ollama pull qwen2.5-coder:3b
@@ -237,7 +261,9 @@ programs. Web pages are refused. Set `TURBO_TOKEN` to also require an
 
 ## Troubleshooting
 
-- **"Can't reach Ollama"**: start the Ollama app, or run `ollama serve`.
+- **"Can't reach Ollama"**: start the Ollama app, or run `ollama serve`. Or use free cloud mode: `turbo setup`.
+- **"free limit was reached"** (cloud): wait for the time shown, or `/model` to another model (limits are per model).
+- **"rejected the API key"** (cloud): run `turbo setup` and paste the key again.
 - **"Model ... is not installed"**: run the `ollama pull ...` command shown.
 - **VS Code says the server isn't running**: run `turbo serve`, or click *Start Server*.
 - **Slow answers or a long "Thinking..."**: run `/status` or `/manage it's too slow`.
@@ -253,6 +279,8 @@ pyproject.toml           packaging (pip/pipx install)
 turbo_core/ui.py         interactive chat (rich + prompt_toolkit)
 turbo_core/manager.py    TURBO Manager agent, tools and playbooks
 turbo_core/system.py     status snapshot and speed tips
+turbo_core/cloud.py      free cloud providers (Groq, Gemini, OpenRouter)
+turbo_core/setup.py      `turbo setup` wizard
 turbo_core/              config, Ollama client, prompts, diffing, history, assistant, server
 vscode-extension/        VS Code extension (plain JavaScript)
 scripts/build_vsix.py    packages the extension

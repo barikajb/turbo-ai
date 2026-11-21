@@ -44,6 +44,14 @@ class LLMInputTooLarge(LLMError):
     pass
 
 
+class LLMAuthError(LLMError):
+    pass
+
+
+class LLMRateLimited(LLMError):
+    pass
+
+
 class OllamaClient:
     def __init__(
         self,

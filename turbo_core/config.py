@@ -77,7 +77,16 @@ class Settings:
     db_path: Path = field(default_factory=lambda: turbo_home() / "turbo.db")
     host: str = "127.0.0.1"
     port: int = 8765
-    token: str = ""
+    token: str = field(default="", repr=False)
+    # Where the model runs: "ollama" (this computer) or a cloud provider
+    # with a free tier: "groq", "gemini", "openrouter". Set up with `turbo setup`.
+    provider: str = "ollama"
+    api_key: str = field(default="", repr=False)  # never printed
+    api_base: str = ""  # optional override of the provider's API URL
+
+    @property
+    def is_cloud(self) -> bool:
+        return self.provider != "ollama"
 
     @classmethod
     def from_env(cls, dotenv: bool = True) -> "Settings":
@@ -85,6 +94,7 @@ class Settings:
             load_dotenv()
         defaults = cls()
         db_path = os.environ.get("TURBO_DB_PATH", "").strip()
+        provider = os.environ.get("TURBO_PROVIDER", defaults.provider).strip().lower() or "ollama"
         return cls(
             ollama_url=os.environ.get("TURBO_OLLAMA_URL", defaults.ollama_url).rstrip("/"),
             chat_model=os.environ.get("TURBO_CHAT_MODEL", defaults.chat_model),
@@ -99,7 +109,21 @@ class Settings:
             host=os.environ.get("TURBO_HOST", defaults.host),
             port=_int_env("TURBO_PORT", defaults.port),
             token=os.environ.get("TURBO_TOKEN", defaults.token),
+            provider=provider,
+            api_key=_api_key(provider),
+            api_base=os.environ.get("TURBO_API_BASE", "").strip(),
         )
+
+
+def _api_key(provider: str) -> str:
+    """TURBO_API_KEY, or the provider's usual variable (e.g. GROQ_API_KEY)."""
+    key = os.environ.get("TURBO_API_KEY", "").strip()
+    if key or provider == "ollama":
+        return key
+    from .cloud import PROVIDERS
+
+    env_name = PROVIDERS.get(provider, {}).get("env_key")
+    return os.environ.get(env_name, "").strip() if env_name else ""
 
 
 def save_setting(key: str, value: str, path: Path | None = None) -> Path:
